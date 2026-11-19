@@ -8,6 +8,10 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.FileInputStream;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.TimeUnit;
 
 import okhttp3.MediaType;
@@ -28,6 +32,7 @@ public final class AiClient {
     }
 
     private static final MediaType JSON = MediaType.parse("application/json; charset=utf-8");
+    public static final String ASR_MODEL = "qwen3-asr-flash";
 
     private static final OkHttpClient HTTP = new OkHttpClient.Builder()
             .connectTimeout(20, TimeUnit.SECONDS)
@@ -216,6 +221,173 @@ public final class AiClient {
         return out.trim();
     }
 
+    /** 屏幕声音转写：千问 qwen3-asr-flash（OpenAI 兼容 chat/completions + input_audio） */
+    public static void transcribe(Context ctx, File wav, Cb cb) {
+        String key = Prefs.key(ctx);
+        if (key.isEmpty()) {
+            cb.onError("还没有填写 API Key，请回到 App 里配置");
+            return;
+        }
+        if (wav == null || !wav.exists()) {
+            cb.onError("没有录到有效声音");
+            return;
+        }
+        new Thread(() -> {
+            try {
+                long size = wav.length();
+                if (size > 9L * 1024 * 1024) {
+                    cb.onError("录音太长，无法一次转写（建议控制在 3 分钟内）");
+                    return;
+                }
+                byte[] bytes = new byte[(int) size];
+                try (FileInputStream in = new FileInputStream(wav)) {
+                    int off = 0;
+                    while (off < bytes.length) {
+                        int r = in.read(bytes, off, bytes.length - off);
+                        if (r < 0) break;
+                        off += r;
+                    }
+                }
+                String b64 = Base64.encodeToString(bytes, Base64.NO_WRAP);
+                JSONArray content = new JSONArray();
+                content.put(new JSONObject().put("type", "input_audio")
+                        .put("input_audio", new JSONObject().put("data", "data:audio/wav;base64," + b64)));
+                JSONArray messages = new JSONArray();
+                messages.put(new JSONObject().put("role", "user").put("content", content));
+                JSONObject body = new JSONObject()
+                        .put("model", ASR_MODEL)
+                        .put("messages", messages)
+                        .put("stream", false)
+                        .put("asr_options", new JSONObject().put("enable_itn", false));
+                cb.onOk(clean(call(ctx, body.toString(), key)));
+            } catch (Exception e) {
+                if (e instanceof ApiException && ((ApiException) e).code == 404) {
+                    cb.onError("当前接口不支持语音识别：需要百炼（qwen3-asr-flash）等支持 ASR 的接口");
+                } else {
+                    cb.onError(readable(e));
+                }
+            }
+        }, "ai-asr").start();
+    }
+
+    /**
+     * 总结「听到」或「看到 + 听到」的内容。
+     *
+     * @param shots      期间截取的屏幕画面（可为空）
+     * @param transcript 声音转写（可为空）
+     * @param screenText 最后一张截图的 OCR 文字（可为空，用于无视觉模型时兜底）
+     */
+    public static void summarize(Context ctx, List<Bitmap> shots, String transcript, String screenText, Cb cb) {
+        String key = Prefs.key(ctx);
+        if (key.isEmpty()) {
+            cb.onError("还没有填写 API Key，请回到 App 里配置");
+            return;
+        }
+        final List<Bitmap> images = new ArrayList<>();
+        if (shots != null) {
+            for (Bitmap b : shots) if (b != null) images.add(b);
+        }
+        final boolean hasImages = !images.isEmpty();
+        final boolean useVision = hasImages && !Prefs.visionModel(ctx).isEmpty();
+        new Thread(() -> {
+            try {
+                StringBuilder user = new StringBuilder();
+                if (hasImages) {
+                    user.append("这次同时记录了手机屏幕画面和声音，");
+                    user.append(useVision ? "按时间顺序附上 " + Math.min(images.size(), 4) + " 张屏幕截图，" : "");
+                    user.append("以及这段时间的屏幕声音转写。\n");
+                }
+                user.append("\n【声音转写】\n");
+                if (transcript == null || transcript.trim().isEmpty()) {
+                    user.append("（没有识别到语音内容）");
+                } else {
+                    user.append(trim(transcript.trim(), 6000));
+                }
+                if (screenText != null && !screenText.trim().isEmpty()) {
+                    user.append("\n\n【最后一张截图中的文字】\n").append(trim(screenText.trim(), 2500));
+                }
+                user.append("\n\n").append(hasImages
+                        ? "请按要求的格式总结画面与声音的内容。"
+                        : "请按要求的格式总结这段声音的内容。");
+
+                JSONArray messages = new JSONArray();
+                messages.put(new JSONObject().put("role", "system").put("content", hasImages ? seePrompt() : hearPrompt()));
+                JSONObject msg = new JSONObject().put("role", "user");
+                if (useVision) {
+                    JSONArray content = new JSONArray();
+                    content.put(new JSONObject().put("type", "text").put("text", user.toString()));
+                    int count = 0;
+                    for (Bitmap b : images) {
+                        if (count++ >= 4) break;
+                        content.put(new JSONObject().put("type", "image_url")
+                                .put("image_url", new JSONObject().put("url", dataUrl(b, 1024))));
+                    }
+                    msg.put("content", content);
+                } else {
+                    msg.put("content", user.toString());
+                }
+                messages.put(msg);
+
+                String body = new JSONObject()
+                        .put("model", useVision ? Prefs.visionModel(ctx) : Prefs.model(ctx))
+                        .put("messages", messages)
+                        .put("temperature", 0.3)
+                        .put("max_tokens", 1200)
+                        .toString();
+                cb.onOk(clean(call(ctx, body, key)));
+            } catch (Exception e) {
+                cb.onError(readable(e));
+            }
+        }, "ai-summary").start();
+    }
+
+    /** 按时间轴总结「看 + 听」内容：截图 + 与其一一对应的时间段转写 */
+    public static void summarizeTimeline(Context ctx, List<Bitmap> shots, String timeline, Cb cb) {
+        String key = Prefs.key(ctx);
+        if (key.isEmpty()) {
+            cb.onError("还没有填写 API Key，请回到 App 里配置");
+            return;
+        }
+        final List<Bitmap> images = new ArrayList<>();
+        if (shots != null) for (Bitmap b : shots) if (b != null) images.add(b);
+        final boolean useVision = !images.isEmpty() && !Prefs.visionModel(ctx).isEmpty();
+        new Thread(() -> {
+            try {
+                StringBuilder user = new StringBuilder();
+                user.append("这是这次「看 + 听」记录的时间轴：截图按时间顺序编号为图1、图2……，")
+                        .append("每个时间段下面的「声音」是该时段的语音转写。\n\n")
+                        .append(timeline)
+                        .append("\n\n请按要求总结。");
+                JSONArray messages = new JSONArray();
+                messages.put(new JSONObject().put("role", "system").put("content", timelinePrompt()));
+                JSONObject msg = new JSONObject().put("role", "user");
+                if (useVision) {
+                    JSONArray content = new JSONArray();
+                    content.put(new JSONObject().put("type", "text").put("text", user.toString()));
+                    int count = 0;
+                    for (Bitmap b : images) {
+                        if (count++ >= 8) break;
+                        content.put(new JSONObject().put("type", "image_url")
+                                .put("image_url", new JSONObject().put("url", dataUrl(b, 1024))));
+                    }
+                    msg.put("content", content);
+                } else {
+                    msg.put("content", user.toString());
+                }
+                messages.put(msg);
+                String body = new JSONObject()
+                        .put("model", useVision ? Prefs.visionModel(ctx) : Prefs.model(ctx))
+                        .put("messages", messages)
+                        .put("temperature", 0.3)
+                        .put("max_tokens", 1400)
+                        .toString();
+                cb.onOk(clean(call(ctx, body, key)));
+            } catch (Exception e) {
+                cb.onError(readable(e));
+            }
+        }, "ai-timeline").start();
+    }
+
     private static String call(Context ctx, String body, String key) throws Exception {
         String url = endpoint(Prefs.baseUrl(ctx));
         Request req = new Request.Builder()
@@ -255,9 +427,12 @@ public final class AiClient {
     }
 
     private static String dataUrl(Bitmap bmp) {
+        return dataUrl(bmp, 1280);
+    }
+
+    private static String dataUrl(Bitmap bmp, int max) {
         int w = bmp.getWidth();
         int h = bmp.getHeight();
-        int max = 1280;
         if (Math.max(w, h) > max) {
             float r = max / (float) Math.max(w, h);
             bmp = Bitmap.createScaledBitmap(bmp, Math.round(w * r), Math.round(h * r), true);
@@ -265,6 +440,35 @@ public final class AiClient {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         bmp.compress(Bitmap.CompressFormat.JPEG, 85, out);
         return "data:image/jpeg;base64," + Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP);
+    }
+
+    private static String hearPrompt() {
+        return "你是声音总结助手。用户录下了一段手机屏幕声音（视频、播客、会议、课程等），下面是语音转写，可能有错漏。\n"
+                + "请用简体中文输出：\n"
+                + "1. 一句话主题\n"
+                + "2. 3-6 条要点\n"
+                + "3. 结论或待办（没有就省略）\n"
+                + "只依据转写内容总结，不要编造，不要重复原文。";
+    }
+
+    private static String timelinePrompt() {
+        return "你是「看 + 听」视频/屏幕内容总结助手。你会收到按时间顺序编号的截图（图1、图2……），以及按时间段对齐的声音转写。\n"
+                + "请用简体中文输出：\n"
+                + "1. 整体主题（一句话）\n"
+                + "2. 按时间顺序梳理：每段一行，格式「mm:ss 画面：…；声音：…」，只写有信息的时间段\n"
+                + "3. 3-5 条关键信息或结论\n"
+                + "4. 待办（没有就省略）\n"
+                + "要求：结合该时间段的截图与声音，不要编造画面或声音里没有的内容；转写有错漏时按上下文合理理解。";
+    }
+
+    private static String seePrompt() {
+        return "你是「看 + 听」总结助手。你会收到按时间顺序排列的手机屏幕截图，以及同一段时间的屏幕声音转写。\n"
+                + "请用简体中文输出：\n"
+                + "1. 画面在做什么（应用或内容）\n"
+                + "2. 声音在讲什么\n"
+                + "3. 两者结合后的 3-6 条关键信息\n"
+                + "4. 结论或待办（没有就省略）\n"
+                + "不要编造截图里不存在的内容；看不清就说看不清。";
     }
 
     private static String askPrompt() {

@@ -18,6 +18,7 @@ import android.os.Build;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
+import android.os.SystemClock;
 import android.os.VibrationEffect;
 import android.os.Vibrator;
 import android.text.InputType;
@@ -36,7 +37,15 @@ import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
 
+import java.io.File;
+import java.io.FileOutputStream;
+import java.nio.file.Files;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Locale;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 
@@ -66,6 +75,18 @@ public class FloatingService extends Service implements CaptureManager.CallbackH
 
     private CaptureManager capture;
     private boolean busy;
+
+    private static final int MODE_NONE = 0;
+    private static final int MODE_LISTEN = 1;
+    private static final int MODE_SEE = 2;
+    private int mode = MODE_NONE;
+    private AudioCapture audioCapture;
+    private static final int SEE_INTERVAL_MS = 15000;
+    private static final int SEE_MAX_SHOTS = 8;
+    private final ArrayList<Bitmap> seenShots = new ArrayList<>();
+    private final ArrayList<Long> shotTimes = new ArrayList<>();
+    private Runnable seeLoop;
+    private long sessionStart;
 
     private int tapCount;
     private Runnable tapResolve;
@@ -114,6 +135,12 @@ public class FloatingService extends Service implements CaptureManager.CallbackH
 
     @Override
     public void onDestroy() {
+        if (audioCapture != null) {
+            audioCapture.discard();
+            audioCapture = null;
+        }
+        stopSeeLoop();
+        clearShots();
         releaseUi();
         if (capture != null) capture.release();
         Prefs.setRunning(this, false);
@@ -315,22 +342,22 @@ public class FloatingService extends Service implements CaptureManager.CallbackH
         tapCount++;
         if (tapResolve == null) tapResolve = this::resolveTaps;
         main.removeCallbacks(tapResolve);
-        if (tapCount >= 3) {
-            main.post(this::resolveTaps);
-        } else {
-            main.postDelayed(tapResolve, MULTI_TAP_WINDOW);
-        }
+        main.postDelayed(tapResolve, MULTI_TAP_WINDOW);
     }
 
     private void resolveTaps() {
-        int count = tapCount;
+        int count = Math.min(tapCount, 5);
         tapCount = 0;
         if (count == 1) {
             onSingleTap();
         } else if (count == 2) {
             onDoubleTap();
-        } else if (count >= 3) {
+        } else if (count == 3) {
             onTripleTap();
+        } else if (count == 4) {
+            onQuadTap();
+        } else if (count >= 5) {
+            onQuintTap();
         }
     }
 
@@ -399,6 +426,367 @@ public class FloatingService extends Service implements CaptureManager.CallbackH
                 });
             });
         });
+    }
+
+    // ---------------- 四击听屏 / 五击看+听 ----------------
+
+    private void onQuadTap() {
+        if (mode == MODE_LISTEN) {
+            stopListenAndSummarize();
+        } else if (mode == MODE_SEE) {
+            showToast("正在看+听，请五击结束");
+        } else {
+            startListen();
+        }
+    }
+
+    private void onQuintTap() {
+        if (mode == MODE_SEE) {
+            stopSeeAndSummarize();
+        } else if (mode == MODE_LISTEN) {
+            showToast("正在只听屏幕，请四击结束；要同时看画面，请结束后再五击");
+        } else {
+            startSee();
+        }
+    }
+
+    private void startListen() {
+        if (Build.VERSION.SDK_INT < 29) {
+            showToast("系统版本过低，无法录制屏幕声音（需要 Android 10 及以上）");
+            return;
+        }
+        if (!capture.isReady()) {
+            showToast("截图授权已失效，请回到 App 重新开启悬浮助手");
+            return;
+        }
+        AudioCapture a = new AudioCapture(this::onAudioLimit);
+        if (!a.start(capture.getProjection())) {
+            showToast("无法录制屏幕声音，请重新开启悬浮助手后再试");
+            return;
+        }
+        audioCapture = a;
+        mode = MODE_LISTEN;
+        sessionStart = System.currentTimeMillis();
+        updateBallMode();
+        tick(25);
+        showToast("开始听屏幕，再次四击结束并总结");
+    }
+
+    private void startSee() {
+        if (Build.VERSION.SDK_INT < 29) {
+            showToast("系统版本过低，无法录制屏幕声音（需要 Android 10 及以上）");
+            return;
+        }
+        if (!capture.isReady()) {
+            showToast("截图授权已失效，请回到 App 重新开启悬浮助手");
+            return;
+        }
+        clearShots();
+        AudioCapture a = new AudioCapture(this::onAudioLimit);
+        if (a.start(capture.getProjection())) {
+            audioCapture = a;
+        } else {
+            audioCapture = null;
+            showToast("无法录制屏幕声音，这次只记录画面");
+        }
+        mode = MODE_SEE;
+        sessionStart = System.currentTimeMillis();
+        updateBallMode();
+        tick(25);
+        startSeeLoop();
+        showToast("开始看+听屏幕，再次五击结束并总结");
+    }
+
+    private void onAudioLimit() {
+        main.post(() -> {
+            if (mode == MODE_LISTEN) {
+                showToast("已达 150 秒录制上限，自动结束并总结");
+                stopListenAndSummarize();
+            } else if (mode == MODE_SEE) {
+                showToast("已达 150 秒录制上限，自动结束并总结");
+                stopSeeAndSummarize();
+            }
+        });
+    }
+
+    private void stopListenAndSummarize() {
+        if (mode != MODE_LISTEN || audioCapture == null) return;
+        long ms = audioCapture.durationMs();
+        File wav = saveAudio();
+        mode = MODE_NONE;
+        updateBallMode();
+        if (wav == null || ms < 800) {
+            showToast("没有录到有效声音（可能该应用禁止被录制）");
+            return;
+        }
+        final PanelState st = showPanel("听屏总结", null, false);
+        setLoading(st, true, "正在转写屏幕声音…");
+        AiClient.transcribe(this, wav, new AiClient.Cb() {
+            @Override
+            public void onOk(String text) {
+                main.post(() -> {
+                    if (panel != st) return;
+                    final String t = text == null ? "" : text.trim();
+                    if (t.isEmpty()) {
+                        setLoading(st, false, "没有识别到语音内容。\n可能是这段时间屏幕没有声音，或该应用禁止被录制。");
+                        return;
+                    }
+                    setLoading(st, true, "正在总结…");
+                    AiClient.summarize(FloatingService.this, null, t, "", new AiClient.Cb() {
+                        @Override
+                        public void onOk(String summary) {
+                            main.post(() -> {
+                                if (panel != st) return;
+                                setLoading(st, false, summary + "\n\n—— 声音原文 ——\n" + clip(t, 1600));
+                            });
+                        }
+
+                        @Override
+                        public void onError(String message) {
+                            main.post(() -> {
+                                if (panel != st) return;
+                                setLoading(st, false, message + "\n\n—— 声音原文 ——\n" + clip(t, 1600));
+                            });
+                        }
+                    });
+                });
+            }
+
+            @Override
+            public void onError(String message) {
+                main.post(() -> {
+                    if (panel != st) return;
+                    setLoading(st, false, message);
+                });
+            }
+        });
+    }
+
+    private void stopSeeAndSummarize() {
+        if (mode != MODE_SEE) return;
+        stopSeeLoop();
+        long ms = audioCapture != null ? audioCapture.durationMs() : 0;
+        File wav = saveAudio();
+        final List<Bitmap> shots = new ArrayList<>(seenShots);
+        final List<Long> times = new ArrayList<>(shotTimes);
+        seenShots.clear();
+        shotTimes.clear();
+        mode = MODE_NONE;
+        updateBallMode();
+        if (shots.isEmpty() && wav == null) {
+            showToast("没有记录到内容");
+            return;
+        }
+        final PanelState st = showPanel("看+听总结", shots.isEmpty() ? null : shots.get(shots.size() - 1), false);
+        setLoading(st, true, "正在按时间轴整理画面与声音…");
+        if (wav == null || ms < 800) {
+            buildTimeline(st, shots, times, new String[0], "没有录到有效声音");
+        } else {
+            splitAndTranscribe(st, wav, shots, times);
+        }
+    }
+
+    /** 按 15 秒一段切分音频并并行转写，与截图时间对齐 */
+    private void splitAndTranscribe(PanelState st, File wav, List<Bitmap> shots, List<Long> times) {
+        new Thread(() -> {
+            byte[] all;
+            try {
+                all = Files.readAllBytes(wav.toPath());
+            } catch (Exception e) {
+                main.post(() -> buildTimeline(st, shots, times, new String[0], "读取录音失败"));
+                return;
+            }
+            if (all.length <= 44) {
+                main.post(() -> buildTimeline(st, shots, times, new String[0], "没有录到有效声音"));
+                return;
+            }
+            int dataLen = all.length - 44;
+            int segBytes = 16000 * 2 * 15;
+            int count = (dataLen + segBytes - 1) / segBytes;
+            count = Math.max(1, Math.min(SEE_MAX_SHOTS, count));
+            File dir = new File(getCacheDir(), "asr");
+            if (!dir.exists()) dir.mkdirs();
+            final String[] texts = new String[count];
+            final String[] error = new String[1];
+            final File[] segFiles = new File[count];
+
+            ExecutorService pool = Executors.newFixedThreadPool(Math.min(4, count));
+            CountDownLatch latch = new CountDownLatch(count);
+            for (int i = 0; i < count; i++) {
+                final int idx = i;
+                int off = i * segBytes;
+                int len = Math.min(segBytes, dataLen - off);
+                File seg = new File(dir, "seg_" + idx + "_" + System.currentTimeMillis() + ".wav");
+                segFiles[idx] = seg;
+                try (FileOutputStream out = new FileOutputStream(seg)) {
+                    out.write(AudioCapture.wavHeader(len));
+                    out.write(all, 44 + off, len);
+                } catch (Exception e) {
+                    texts[idx] = "";
+                    latch.countDown();
+                    continue;
+                }
+                pool.submit(() -> AiClient.transcribe(this, seg, new AiClient.Cb() {
+                    @Override
+                    public void onOk(String text) {
+                        texts[idx] = text == null ? "" : text.trim();
+                        latch.countDown();
+                    }
+
+                    @Override
+                    public void onError(String message) {
+                        if (error[0] == null) error[0] = message;
+                        texts[idx] = "";
+                        latch.countDown();
+                    }
+                }));
+            }
+            try {
+                latch.await(150, java.util.concurrent.TimeUnit.SECONDS);
+            } catch (InterruptedException ignored) {
+                Thread.currentThread().interrupt();
+            }
+            pool.shutdownNow();
+            for (File f : segFiles) if (f != null) f.delete();
+            main.post(() -> buildTimeline(st, shots, times, texts, error[0]));
+        }, "asr-split").start();
+    }
+
+    private void buildTimeline(PanelState st, List<Bitmap> shots, List<Long> times, String[] texts, String error) {
+        if (panel != st) return;
+        StringBuilder sb = new StringBuilder();
+        if (texts.length == 0) {
+            for (int i = 0; i < shots.size(); i++) {
+                long sec = times.size() > i ? times.get(i) / 1000 : 0;
+                sb.append(String.format(Locale.CHINA, "%02d:%02d", sec / 60, sec % 60))
+                        .append(" 图").append(i + 1).append("\n");
+            }
+        } else {
+            for (int i = 0; i < texts.length; i++) {
+                int start = i * 15;
+                int end = (i + 1) * 15;
+                sb.append(String.format(Locale.CHINA, "%02d:%02d–%02d:%02d", start / 60, start % 60, end / 60, end % 60));
+                StringBuilder imgs = new StringBuilder();
+                for (int j = 0; j < shots.size(); j++) {
+                    long sec = times.size() > j ? times.get(j) / 1000 : -1;
+                    if (sec >= start && sec < end) {
+                        if (imgs.length() > 0) imgs.append("、");
+                        imgs.append("图").append(j + 1);
+                    }
+                }
+                if (imgs.length() > 0) sb.append("（").append(imgs).append("）");
+                sb.append("\n声音：").append(texts[i] == null || texts[i].trim().isEmpty() ? "（无语音）" : texts[i].trim());
+                sb.append("\n\n");
+            }
+        }
+        if (error != null && !error.isEmpty() && allEmpty(texts)) {
+            sb.insert(0, "（语音转写失败：" + error + "）\n\n");
+        }
+        final String timeline = sb.toString();
+        setLoading(st, true, "正在总结…");
+        AiClient.summarizeTimeline(this, shots, timeline, new AiClient.Cb() {
+            @Override
+            public void onOk(String summary) {
+                main.post(() -> {
+                    if (panel != st) return;
+                    setLoading(st, false, summary + "\n\n—— 时间轴 ——\n" + clip(timeline, 1200));
+                });
+            }
+
+            @Override
+            public void onError(String message) {
+                main.post(() -> {
+                    if (panel != st) return;
+                    setLoading(st, false, message);
+                });
+            }
+        });
+    }
+
+    private static boolean allEmpty(String[] texts) {
+        for (String t : texts) if (t != null && !t.trim().isEmpty()) return false;
+        return true;
+    }
+
+    private void startSeeLoop() {
+        stopSeeLoop();
+        seeLoop = new Runnable() {
+            @Override
+            public void run() {
+                if (mode != MODE_SEE) return;
+                final long offset = SystemClock.elapsedRealtime() - sessionStart;
+                new Thread(() -> {
+                    Bitmap b = capture.capture();
+                    if (b == null) return;
+                    final Bitmap scaled = scale(b, 1024);
+                    main.post(() -> {
+                        if (mode != MODE_SEE) {
+                            scaled.recycle();
+                            return;
+                        }
+                        if (seenShots.size() >= SEE_MAX_SHOTS) {
+                            scaled.recycle();
+                            return;
+                        }
+                        seenShots.add(scaled);
+                        shotTimes.add(offset);
+                    });
+                }, "see-shot").start();
+                main.postDelayed(this, SEE_INTERVAL_MS);
+            }
+        };
+        main.post(seeLoop);
+    }
+
+    private void stopSeeLoop() {
+        if (seeLoop != null) {
+            main.removeCallbacks(seeLoop);
+            seeLoop = null;
+        }
+    }
+
+    private void clearShots() {
+        for (Bitmap b : seenShots) b.recycle();
+        seenShots.clear();
+        shotTimes.clear();
+    }
+
+    private void updateBallMode() {
+        if (button == null) return;
+        button.setText(mode == MODE_LISTEN ? "听" : mode == MODE_SEE ? "看" : "AI");
+        button.setAlpha(mode == MODE_NONE ? Prefs.buttonAlpha(this) : 1f);
+    }
+
+    private File saveAudio() {
+        if (audioCapture == null) return null;
+        File dir = new File(getFilesDir(), "audio");
+        if (!dir.exists()) dir.mkdirs();
+        File out = new File(dir, "listen_" + System.currentTimeMillis() + ".wav");
+        File f = audioCapture.stopAndSave(out);
+        audioCapture = null;
+        if (f != null) cleanupAudio(dir);
+        return f;
+    }
+
+    private void cleanupAudio(File dir) {
+        File[] files = dir.listFiles();
+        if (files == null || files.length <= 4) return;
+        java.util.Arrays.sort(files, (a, b) -> Long.compare(a.lastModified(), b.lastModified()));
+        for (int i = 0; i < files.length - 4; i++) files[i].delete();
+    }
+
+    private Bitmap scale(Bitmap b, int max) {
+        int w = b.getWidth();
+        int h = b.getHeight();
+        int big = Math.max(w, h);
+        if (big <= max) return b;
+        float r = max / (float) big;
+        return Bitmap.createScaledBitmap(b, Math.round(w * r), Math.round(h * r), true);
+    }
+
+    private static String clip(String s, int max) {
+        if (s == null) return "";
+        return s.length() <= max ? s : s.substring(0, max) + "…";
     }
 
     private void runCapture(Consumer<Bitmap> then) {
@@ -517,21 +905,23 @@ public class FloatingService extends Service implements CaptureManager.CallbackH
             root.addView(row, rowLp);
         }
 
-        // 截图缩略图
-        FrameLayout thumbBox = new FrameLayout(this);
-        ImageView thumb = new ImageView(this);
-        thumb.setImageBitmap(shot);
-        thumb.setScaleType(ImageView.ScaleType.CENTER_CROP);
-        GradientDrawable round = new GradientDrawable();
-        round.setColor(0xFF2A2F3A);
-        round.setCornerRadius(Ui.dp(this, 10));
-        thumb.setBackground(round);
-        thumb.setClipToOutline(true);
-        thumbBox.addView(thumb, new FrameLayout.LayoutParams(Ui.dp(this, 128), Ui.dp(this, 84)));
-        LinearLayout.LayoutParams thumbLp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        thumbLp.topMargin = Ui.dp(this, 12);
-        root.addView(thumbBox, thumbLp);
+        // 截图缩略图（听屏总结没有截图）
+        if (shot != null) {
+            FrameLayout thumbBox = new FrameLayout(this);
+            ImageView thumb = new ImageView(this);
+            thumb.setImageBitmap(shot);
+            thumb.setScaleType(ImageView.ScaleType.CENTER_CROP);
+            GradientDrawable round = new GradientDrawable();
+            round.setColor(0xFF2A2F3A);
+            round.setCornerRadius(Ui.dp(this, 10));
+            thumb.setBackground(round);
+            thumb.setClipToOutline(true);
+            thumbBox.addView(thumb, new FrameLayout.LayoutParams(Ui.dp(this, 128), Ui.dp(this, 84)));
+            LinearLayout.LayoutParams thumbLp = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            thumbLp.topMargin = Ui.dp(this, 12);
+            root.addView(thumbBox, thumbLp);
+        }
 
         // 回答区
         st.answerScroll = new ScrollView(this);
@@ -597,12 +987,14 @@ public class FloatingService extends Service implements CaptureManager.CallbackH
         }
 
         // 面板出现后异步 OCR，供提问/翻译使用
-        OcrHelper.recognize(shot, text -> {
-            if (st.ocrDone) return;
-            st.ocr = text;
-            st.ocrDone = true;
-            st.latch.countDown();
-        });
+        if (shot != null) {
+            OcrHelper.recognize(shot, text -> {
+                if (st.ocrDone) return;
+                st.ocr = text;
+                st.ocrDone = true;
+                st.latch.countDown();
+            });
+        }
 
         return st;
     }

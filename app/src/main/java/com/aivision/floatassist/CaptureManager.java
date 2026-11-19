@@ -41,6 +41,10 @@ public class CaptureManager {
         this.context = context.getApplicationContext();
     }
 
+    public android.media.projection.MediaProjection getProjection() {
+        return projection;
+    }
+
     public boolean isReady() {
         return ready;
     }
