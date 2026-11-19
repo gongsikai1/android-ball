@@ -1,0 +1,281 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:fillViewport="true"
+    android:scrollbars="none">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="20dp">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="AI 识图悬浮助手"
+            android:textColor="@color/text"
+            android:textSize="24sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:text="单击存图 · 双击提问 · 三击翻译 · 悬浮球不挡操作"
+            android:textColor="@color/text_sub"
+            android:textSize="13sp" />
+
+        <!-- API 配置 -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="18dp"
+            android:background="@drawable/bg_card"
+            android:orientation="vertical"
+            android:padding="16dp">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="DeepSeek API 配置"
+                android:textColor="@color/text"
+                android:textSize="16sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:text="Key 只保存在本机，不会上传到任何服务器"
+                android:textColor="@color/text_sub"
+                android:textSize="12sp" />
+
+            <EditText
+                android:id="@+id/et_key"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="12dp"
+                android:background="@drawable/bg_input"
+                android:hint="sk-xxxxxxxx（DeepSeek API Key）"
+                android:inputType="textVisiblePassword"
+                android:minHeight="48dp"
+                android:padding="12dp"
+                android:textColor="@color/text"
+                android:textColorHint="#98A2B3"
+                android:textSize="14sp" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:text="接口地址"
+                android:textColor="@color/text_sub"
+                android:textSize="12sp" />
+
+            <EditText
+                android:id="@+id/et_base"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:background="@drawable/bg_input"
+                android:hint="https://api.deepseek.com"
+                android:inputType="textUri"
+                android:minHeight="44dp"
+                android:padding="12dp"
+                android:textColor="@color/text"
+                android:textColorHint="#98A2B3"
+                android:textSize="13sp" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:text="对话模型"
+                android:textColor="@color/text_sub"
+                android:textSize="12sp" />
+
+            <EditText
+                android:id="@+id/et_model"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:background="@drawable/bg_input"
+                android:hint="deepseek-chat"
+                android:inputType="text"
+                android:minHeight="44dp"
+                android:padding="12dp"
+                android:textColor="@color/text"
+                android:textColorHint="#98A2B3"
+                android:textSize="13sp" />
+
+            <TextView
+                android:id="@+id/tv_vision_hint"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:text="视觉模型（可选，留空则先本地 OCR 再把文字发给 AI）"
+                android:textColor="@color/text_sub"
+                android:textSize="12sp" />
+
+            <EditText
+                android:id="@+id/et_vision"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:background="@drawable/bg_input"
+                android:hint="例如 gpt-4o / qwen-vl-max，可填兼容接口的视觉模型"
+                android:inputType="text"
+                android:minHeight="44dp"
+                android:padding="12dp"
+                android:textColor="@color/text"
+                android:textColorHint="#98A2B3"
+                android:textSize="13sp" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="14dp"
+                android:orientation="horizontal">
+
+                <Button
+                    android:id="@+id/btn_save"
+                    android:layout_width="0dp"
+                    android:layout_height="46dp"
+                    android:layout_weight="1"
+                    android:background="@drawable/bg_btn_primary"
+                    android:text="保存配置"
+                    android:textAllCaps="false"
+                    android:textColor="#FFFFFF"
+                    android:textSize="14sp" />
+
+                <Button
+                    android:id="@+id/btn_test"
+                    android:layout_width="0dp"
+                    android:layout_height="46dp"
+                    android:layout_marginStart="10dp"
+                    android:layout_weight="1"
+                    android:background="@drawable/bg_btn_ghost"
+                    android:text="测试连接"
+                    android:textAllCaps="false"
+                    android:textColor="@color/primary"
+                    android:textSize="14sp" />
+            </LinearLayout>
+        </LinearLayout>
+
+        <!-- 悬浮球 -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="14dp"
+            android:background="@drawable/bg_card"
+            android:orientation="vertical"
+            android:padding="16dp">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="悬浮球"
+                android:textColor="@color/text"
+                android:textSize="16sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/tv_perm"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:text="悬浮窗权限：未授予"
+                android:textColor="@color/text_sub"
+                android:textSize="13sp" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="14dp"
+                android:text="悬浮球透明度"
+                android:textColor="@color/text_sub"
+                android:textSize="12sp" />
+
+            <SeekBar
+                android:id="@+id/seek_alpha"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="2dp"
+                android:max="100" />
+
+            <TextView
+                android:id="@+id/tv_alpha"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="85%"
+                android:textColor="@color/text_sub"
+                android:textSize="12sp" />
+
+            <Button
+                android:id="@+id/btn_perm"
+                android:layout_width="match_parent"
+                android:layout_height="46dp"
+                android:layout_marginTop="12dp"
+                android:background="@drawable/bg_btn_ghost"
+                android:text="授予悬浮窗权限"
+                android:textAllCaps="false"
+                android:textColor="@color/primary"
+                android:textSize="14sp" />
+
+            <Button
+                android:id="@+id/btn_start"
+                android:layout_width="match_parent"
+                android:layout_height="50dp"
+                android:layout_marginTop="10dp"
+                android:background="@drawable/bg_btn_primary"
+                android:text="开启悬浮助手"
+                android:textAllCaps="false"
+                android:textColor="#FFFFFF"
+                android:textSize="15sp"
+                android:textStyle="bold" />
+
+            <Button
+                android:id="@+id/btn_stop"
+                android:layout_width="match_parent"
+                android:layout_height="46dp"
+                android:layout_marginTop="8dp"
+                android:background="@drawable/bg_btn_ghost"
+                android:text="停止悬浮助手"
+                android:textAllCaps="false"
+                android:textColor="@color/text_sub"
+                android:textSize="14sp" />
+
+            <TextView
+                android:id="@+id/tv_status"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:text="状态：未运行"
+                android:textColor="@color/text_sub"
+                android:textSize="13sp" />
+        </LinearLayout>
+
+        <Button
+            android:id="@+id/btn_gallery"
+            android:layout_width="match_parent"
+            android:layout_height="50dp"
+            android:layout_marginTop="14dp"
+            android:background="@drawable/bg_btn_ghost"
+            android:text="AI 截图库（0）"
+            android:textAllCaps="false"
+            android:textColor="@color/text"
+            android:textSize="15sp" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="18dp"
+            android:lineSpacingExtra="4dp"
+            android:text="使用说明\n1. 首次开启需授予「悬浮窗」权限与「屏幕截图」授权。\n2. 单击悬浮球：截图并存入 AI 截图库。\n3. 双击悬浮球：弹出输入框，打字结合截图提问。\n4. 三击悬浮球：翻译截图中的文字（中文→英文，其他→中文）。\n5. 拖动悬浮球可移动位置，长按可打开快捷菜单。\n6. 悬浮球只占一小块区域，其余屏幕照常操作。"
+            android:textColor="@color/text_sub"
+            android:textSize="12sp" />
+
+    </LinearLayout>
+</ScrollView>

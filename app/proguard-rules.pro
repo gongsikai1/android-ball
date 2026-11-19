@@ -1,0 +1,3 @@
+-keep class com.aivision.floatassist.** { *; }
+-dontwarn okhttp3.**
+-dontwarn okio.**
