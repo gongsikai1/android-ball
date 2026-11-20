@@ -871,6 +871,8 @@ public class FloatingService extends Service implements CaptureManager.CallbackH
         subZh.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
         subZh.setTypeface(Typeface.DEFAULT_BOLD);
         subZh.setMaxLines(2);
+        subZh.setGravity(Gravity.CENTER);
+        subZh.setTextAlignment(View.TEXT_ALIGNMENT_CENTER);
         subZh.setEllipsize(android.text.TextUtils.TruncateAt.END);
         subZh.setLineSpacing(Ui.dp(this, 2), 1f);
         root.addView(subZh, new LinearLayout.LayoutParams(
@@ -881,6 +883,8 @@ public class FloatingService extends Service implements CaptureManager.CallbackH
         subEn.setTextColor(0xCCFFFFFF);
         subEn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
         subEn.setMaxLines(2);
+        subEn.setGravity(Gravity.CENTER);
+        subEn.setTextAlignment(View.TEXT_ALIGNMENT_CENTER);
         subEn.setEllipsize(android.text.TextUtils.TruncateAt.END);
         LinearLayout.LayoutParams enLp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);

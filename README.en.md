@@ -5,7 +5,7 @@
 An always-on-top Android floating ball: **tap to save the screenshot, double-tap to ask a typed question with the screenshot, triple-tap to translate the screenshot**. The ball is only 48dp, never takes input focus, and every touch outside its own window goes straight to the app underneath — video, chat and browsing keep working normally.
 
 - Package: `com.aivision.floatassist`
-- Version: 1.4
+- Version: 1.5
 - Minimum: Android 8.0 (API 26), tuned for Android 14
 - Stack: Java + Android Framework + MediaProjection + ML Kit OCR + OkHttp
 
@@ -34,9 +34,9 @@ Drag the ball to move it; it snaps to the nearest edge on release. Long-press fo
 ## Live bilingual subtitles
 
 - Long-press the ball for 2 seconds to start, again to stop; the ball shows "译" while active.
-- The subtitle window sits at the bottom, ignores touch, and never blocks the app underneath. Chinese is always the first line, English the second.
-- How it works: every 2.6 seconds a chunk of screen audio is transcribed by `qwen3-asr-flash`, then translated into the other language (Chinese speech → English, English speech → Chinese). The source line appears first, the pair is completed when translation returns.
-- Because a chunk must accumulate first, subtitles lag the picture by roughly 4–8 seconds — near real-time. Backlogged chunks are dropped so it keeps up.
+- The subtitle window sits at the bottom with text centered horizontally, ignores touch, and never blocks the app underneath. Chinese is always the first line, English the second.
+- How it works: every 1 second a chunk of screen audio (with 0.3s overlap to avoid cut words) is transcribed by `qwen3-asr-flash`; three transcriptions run in parallel and the source line appears immediately. Translation runs in a separate pool, and stale chunks are dropped so they never slow the next recognition.
+- Subtitles lag the picture by roughly 2–4 seconds — near real-time. Older translations superseded by a newer chunk are skipped so subtitles keep up.
 - Requires the Model Studio (Bailian/Qwen) endpoint for both ASR and translation; unavailable while the projection token is held by another recorder.
 
 ## Screen capture vs. the system recorder (Xiaomi / HyperOS)
@@ -132,6 +132,7 @@ app/src/main/java/com/aivision/floatassist/
 
 ## Changelog
 
+- **1.5**: Faster subtitles — 1-second chunks, three parallel transcriptions, separate translation pool; bottom bar text now centered. Latency down from roughly 4–8s to 2–4s.
 - **1.4**: Added long-press (2s) live bilingual subtitles with Chinese on top and English below, fixed at the bottom; 2.6-second chunks are transcribed and translated with roughly 4–8s latency.
 - **1.3**: Fixed capture failures and black five-tap frames while the system recorder runs: added an accessibility screenshot fallback with automatic switching on empty/black frames, graceful degradation when the projection is revoked, and screen-only see-listen mode without a capture token.
 - **1.2**: Added quadruple-tap listen and quintuple-tap see+listen; AudioPlaybackCapture for screen audio, `qwen3-asr-flash` chunked transcription, and a 15-second timeline that aligns screenshots with audio before summarizing. The ball shows a "听 / 看" state.

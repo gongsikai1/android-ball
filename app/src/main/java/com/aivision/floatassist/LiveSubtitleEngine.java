@@ -13,16 +13,19 @@ import android.os.SystemClock;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileOutputStream;
-import java.nio.ByteBuffer;
-import java.nio.ByteOrder;
+import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
- * 实时屏幕声音字幕：每 2.6 秒切一段录音，先转写，再翻译成另一种语言。
- * 中文语音 → 中文字幕 + 英文字幕；英文语音 → 中文字幕 + 英文字幕。
+ * 实时屏幕声音字幕（低延迟版）：
+ * 每 1 秒切一段录音（带 0.3 秒重叠，减少断词），多段并行转写，
+ * 转写结果直接上屏，翻译在独立线程池补齐，旧结果自动丢弃，保证字幕跟手。
+ * 中文语音 → 上中文、下英文；英文语音 → 上中文译文、下英文原文。
  */
 public class LiveSubtitleEngine {
 
@@ -37,19 +40,33 @@ public class LiveSubtitleEngine {
     }
 
     private static final int RATE = 16000;
-    private static final long CHUNK_MS = 2600;
-    private static final int MAX_QUEUE = 2;
+    /** 每段录音长度：1 秒，短段意味着更低延迟 */
+    private static final long CHUNK_MS = 1000;
+    /** 段间重叠 0.3 秒，避免把词切成两半 */
+    private static final int OVERLAP_BYTES = (int) (RATE * 2 * 0.3);
+    /** 一段至少 0.5 秒才提交，太短识别不稳 */
+    private static final int MIN_BYTES = RATE * 2 / 2;
 
     private final android.content.Context context;
     private final Listener listener;
     private final Handler main = new Handler(Looper.getMainLooper());
-    private final LinkedBlockingQueue<byte[]> queue = new LinkedBlockingQueue<>();
+
+    private final Object lock = new Object();
+    private volatile int latestSourceSeq = 0;
+    private String lastText = "";
+
+    private final AtomicInteger seqGen = new AtomicInteger(0);
+    private final AtomicInteger failStreak = new AtomicInteger(0);
+    private final AtomicInteger okCount = new AtomicInteger(0);
+    private volatile String lastError = "";
+    private volatile boolean errorReported = false;
+
+    private ThreadPoolExecutor asrPool;
+    private ExecutorService translatePool;
 
     private AudioRecord record;
     private Thread recThread;
-    private Thread workThread;
     private volatile boolean running;
-    private int seq;
 
     public LiveSubtitleEngine(android.content.Context context, Listener listener) {
         this.context = context.getApplicationContext();
@@ -84,12 +101,33 @@ public class LiveSubtitleEngine {
                 record = null;
                 return false;
             }
+
+            // 转写 3 路并行，跟不上就丢最旧的段；翻译单独 2 路，不阻塞下一段转写
+            asrPool = new ThreadPoolExecutor(3, 3, 30, TimeUnit.SECONDS,
+                    new ArrayBlockingQueue<>(2), (r, executor) -> {
+                        if (!executor.isShutdown()) {
+                            executor.getQueue().poll();
+                            try {
+                                executor.execute(r);
+                            } catch (Exception ignored) {
+                            }
+                        }
+                    });
+            translatePool = new ThreadPoolExecutor(2, 2, 30, TimeUnit.SECONDS,
+                    new ArrayBlockingQueue<>(2), (r, executor) -> {
+                        if (!executor.isShutdown()) {
+                            executor.getQueue().poll();
+                            try {
+                                executor.execute(r);
+                            } catch (Exception ignored) {
+                            }
+                        }
+                    });
+
             running = true;
             record.startRecording();
             recThread = new Thread(this::recordLoop, "subtitle-rec");
-            workThread = new Thread(this::workLoop, "subtitle-asr");
             recThread.start();
-            workThread.start();
             return true;
         } catch (Exception e) {
             running = false;
@@ -99,8 +137,8 @@ public class LiveSubtitleEngine {
     }
 
     private void recordLoop() {
-        short[] buf = new short[2048];
-        ByteBuffer bytes = ByteBuffer.allocate(buf.length * 2).order(ByteOrder.LITTLE_ENDIAN);
+        short[] buf = new short[1024];
+        ByteBufferCache bytes = new ByteBufferCache(buf.length);
         ByteArrayOutputStream acc = new ByteArrayOutputStream();
         long chunkStart = SystemClock.elapsedRealtime();
         while (running) {
@@ -111,61 +149,90 @@ public class LiveSubtitleEngine {
                 break;
             }
             if (n <= 0) continue;
-            bytes.clear();
-            for (int i = 0; i < n; i++) bytes.putShort(buf[i]);
+            bytes.write(buf, n);
             acc.write(bytes.array(), 0, n * 2);
 
             if (SystemClock.elapsedRealtime() - chunkStart >= CHUNK_MS) {
                 byte[] data = acc.toByteArray();
                 acc.reset();
                 chunkStart = SystemClock.elapsedRealtime();
-                if (data.length >= 3200) {
-                    while (queue.size() >= MAX_QUEUE) queue.poll();
-                    queue.offer(data);
+                // 保留尾部一小段作为下一段的开头，跨句更连贯
+                if (data.length > OVERLAP_BYTES) {
+                    acc.write(data, data.length - OVERLAP_BYTES, OVERLAP_BYTES);
+                }
+                if (data.length >= MIN_BYTES) {
+                    final int mySeq = seqGen.incrementAndGet();
+                    final byte[] payload = data;
+                    try {
+                        asrPool.execute(() -> process(mySeq, payload));
+                    } catch (Exception ignored) {
+                    }
                 }
             }
         }
     }
 
-    private void workLoop() {
-        while (running) {
-            byte[] data;
-            try {
-                data = queue.poll(300, TimeUnit.MILLISECONDS);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                break;
-            }
-            if (data == null) continue;
-            File wav = writeWav(data);
-            if (wav == null) continue;
+    /** 转写 + 上屏；翻译转交独立线程池 */
+    private void process(int mySeq, byte[] pcm) {
+        if (!running) return;
+        File wav = writeWav(mySeq, pcm);
+        if (wav == null) return;
 
-            String text = transcribeBlocking(wav);
-            wav.delete();
-            if (!running) break;
-            if (text == null) {
-                // 识别失败：提示一次后继续尝试
-                String err = lastError;
-                main.post(() -> listener.onError(err));
-                continue;
-            }
-            text = text.trim();
-            if (text.isEmpty()) continue;
+        String text = transcribeBlocking(wav);
+        wav.delete();
+        if (!running) return;
 
-            boolean sourceChinese = "英文".equals(AiClient.detectTarget(text));
-            final String source = text;
-            main.post(() -> listener.onSource(source, sourceChinese));
+        if (text == null) {
+            if (failStreak.incrementAndGet() >= 2 && okCount.get() == 0) reportError(lastError);
+            return;
+        }
+        failStreak.set(0);
+        okCount.incrementAndGet();
 
-            String target = sourceChinese ? "英文" : "简体中文";
-            String translated = translateBlocking(text, target);
-            if (!running) break;
-            final String trans = translated == null ? "" : translated;
-            if (trans.isEmpty()) continue;
-            main.post(() -> listener.onTranslated(source, trans, sourceChinese));
+        final String clean = normalize(text);
+        if (clean.isEmpty()) return;
+
+        synchronized (lock) {
+            if (mySeq < latestSourceSeq) return; // 已有更新的段上屏，旧的丢弃
+            if (clean.equals(lastText)) return;
+            latestSourceSeq = mySeq;
+            lastText = clean;
+        }
+
+        final boolean sourceChinese = "英文".equals(AiClient.detectTarget(clean));
+        main.post(() -> listener.onSource(clean, sourceChinese));
+
+        String target = sourceChinese ? "英文" : "简体中文";
+        try {
+            translatePool.execute(() -> {
+                String translated = translateBlocking(clean, target);
+                if (!running) return;
+                if (translated == null || translated.isEmpty()) return;
+                synchronized (lock) {
+                    if (mySeq < latestSourceSeq) return; // 这条已被新字幕顶掉
+                }
+                final String shownTrans = translated;
+                main.post(() -> listener.onTranslated(clean, shownTrans, sourceChinese));
+            });
+        } catch (Exception ignored) {
         }
     }
 
-    private String lastError = "";
+    private void reportError(String message) {
+        if (errorReported) return;
+        errorReported = true;
+        final String msg = (message == null || message.isEmpty()) ? "语音识别失败" : message;
+        main.post(() -> listener.onError(msg));
+    }
+
+    private String normalize(String text) {
+        String s = text.replaceAll("\\s+", " ").trim();
+        // 去掉 ASR 常见的空白标点前缀
+        while (s.startsWith("，") || s.startsWith(",") || s.startsWith("。") || s.startsWith(".")) {
+            s = s.substring(1).trim();
+        }
+        return s;
+    }
 
     private String transcribeBlocking(File wav) {
         final CountDownLatch latch = new CountDownLatch(1);
@@ -185,14 +252,11 @@ public class LiveSubtitleEngine {
             }
         });
         try {
-            if (!latch.await(30, TimeUnit.SECONDS)) lastError = "语音识别超时";
+            if (!latch.await(20, TimeUnit.SECONDS)) lastError = "语音识别超时";
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }
-        lastError = err.get();
-        if (ref.get() == null && !lastError.isEmpty() && !running) {
-            main.post(() -> listener.onError(lastError));
-        }
+        if (err.get() != null && !err.get().isEmpty()) lastError = err.get();
         return ref.get();
     }
 
@@ -208,22 +272,21 @@ public class LiveSubtitleEngine {
 
             @Override
             public void onError(String message) {
-                lastError = message;
                 latch.countDown();
             }
         });
         try {
-            latch.await(30, TimeUnit.SECONDS);
+            latch.await(20, TimeUnit.SECONDS);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }
         return ref.get();
     }
 
-    private File writeWav(byte[] pcm) {
+    private File writeWav(int mySeq, byte[] pcm) {
         File dir = new File(context.getCacheDir(), "subtitle_chunks");
         if (!dir.exists()) dir.mkdirs();
-        File f = new File(dir, "chunk_" + (seq++) + ".wav");
+        File f = new File(dir, "chunk_" + mySeq + ".wav");
         try (FileOutputStream out = new FileOutputStream(f)) {
             out.write(AudioCapture.wavHeader(pcm.length));
             out.write(pcm);
@@ -235,7 +298,6 @@ public class LiveSubtitleEngine {
 
     public void stop() {
         running = false;
-        queue.clear();
         AudioRecord r = record;
         if (r != null) {
             try {
@@ -251,9 +313,14 @@ public class LiveSubtitleEngine {
             }
             recThread = null;
         }
-        if (workThread != null) {
-            workThread.interrupt();
-            workThread = null;
+        if (asrPool != null) {
+            asrPool.getQueue().clear();
+            asrPool.shutdownNow();
+            asrPool = null;
+        }
+        if (translatePool != null) {
+            translatePool.shutdownNow();
+            translatePool = null;
         }
         release();
         File dir = new File(context.getCacheDir(), "subtitle_chunks");
@@ -268,6 +335,24 @@ public class LiveSubtitleEngine {
             } catch (Exception ignored) {
             }
             record = null;
+        }
+    }
+
+    /** 小工具：short[] → little-endian bytes，避免每轮重分配 */
+    private static class ByteBufferCache {
+        private final java.nio.ByteBuffer buffer;
+
+        ByteBufferCache(int samples) {
+            buffer = java.nio.ByteBuffer.allocate(samples * 2).order(java.nio.ByteOrder.LITTLE_ENDIAN);
+        }
+
+        void write(short[] src, int n) {
+            buffer.clear();
+            for (int i = 0; i < n; i++) buffer.putShort(src[i]);
+        }
+
+        byte[] array() {
+            return buffer.array();
         }
     }
 }
