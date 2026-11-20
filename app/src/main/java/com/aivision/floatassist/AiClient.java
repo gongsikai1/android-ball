@@ -221,6 +221,37 @@ public final class AiClient {
         return out.trim();
     }
 
+    /** 纯文本翻译（实时字幕用） */
+    public static void translateText(Context ctx, String text, String target, Cb cb) {
+        String key = Prefs.key(ctx);
+        if (key.isEmpty()) {
+            cb.onError("还没有填写 API Key");
+            return;
+        }
+        final String src = text == null ? "" : text.trim();
+        if (src.isEmpty()) {
+            cb.onOk("");
+            return;
+        }
+        new Thread(() -> {
+            try {
+                JSONArray messages = new JSONArray();
+                messages.put(new JSONObject().put("role", "system").put("content", translatePrompt(target)));
+                messages.put(new JSONObject().put("role", "user")
+                        .put("content", "把下面这段文字翻译成" + target + "，只输出译文：\n\n" + src));
+                String body = new JSONObject()
+                        .put("model", Prefs.model(ctx))
+                        .put("messages", messages)
+                        .put("temperature", 0.1)
+                        .put("max_tokens", 800)
+                        .toString();
+                cb.onOk(clean(call(ctx, body, key)));
+            } catch (Exception e) {
+                cb.onError(readable(e));
+            }
+        }, "ai-translate-text").start();
+    }
+
     /** 屏幕声音转写：千问 qwen3-asr-flash（OpenAI 兼容 chat/completions + input_audio） */
     public static void transcribe(Context ctx, File wav, Cb cb) {
         String key = Prefs.key(ctx);

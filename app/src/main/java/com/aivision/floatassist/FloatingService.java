@@ -66,6 +66,7 @@ public class FloatingService extends Service implements CaptureManager.CallbackH
     private static final String CHANNEL_ID = "ai_float_service";
     private static final int BUTTON_DP = 48;
     private static final long MULTI_TAP_WINDOW = 330;
+    private static final long LONG_PRESS_MS = 2000;
 
     private WindowManager wm;
     private Handler main;
@@ -94,6 +95,11 @@ public class FloatingService extends Service implements CaptureManager.CallbackH
     private PanelState panel;
     private View toastView;
     private View menuView;
+
+    private LiveSubtitleEngine subtitleEngine;
+    private View subtitleView;
+    private TextView subZh;
+    private TextView subEn;
 
 
     @Override
@@ -135,6 +141,7 @@ public class FloatingService extends Service implements CaptureManager.CallbackH
 
     @Override
     public void onDestroy() {
+        stopSubtitles();
         if (audioCapture != null) {
             audioCapture.discard();
             audioCapture = null;
@@ -245,6 +252,7 @@ public class FloatingService extends Service implements CaptureManager.CallbackH
     }
 
     private void releaseUi() {
+        stopSubtitles();
         closePanel();
         removeView(toastView, true);
         toastView = null;
@@ -272,8 +280,8 @@ public class FloatingService extends Service implements CaptureManager.CallbackH
             longPressed = true;
             tapCount = 0;
             if (tapResolve != null) main.removeCallbacks(tapResolve);
-            tick(20);
-            showQuickMenu();
+            tick(30);
+            toggleSubtitles();
         };
 
         @Override
@@ -286,7 +294,7 @@ public class FloatingService extends Service implements CaptureManager.CallbackH
                     startY = buttonParams.y;
                     moved = false;
                     longPressed = false;
-                    main.postDelayed(longPress, 520);
+                    main.postDelayed(longPress, LONG_PRESS_MS);
                     return true;
                 case MotionEvent.ACTION_MOVE:
                     float dx = event.getRawX() - downRawX;
@@ -451,6 +459,7 @@ public class FloatingService extends Service implements CaptureManager.CallbackH
     }
 
     private void startListen() {
+        if (subtitleEngine != null) stopSubtitles();
         if (Build.VERSION.SDK_INT < 29) {
             showToast("系统版本过低，无法录制屏幕声音（需要 Android 10 及以上）");
             return;
@@ -473,6 +482,7 @@ public class FloatingService extends Service implements CaptureManager.CallbackH
     }
 
     private void startSee() {
+        if (subtitleEngine != null) stopSubtitles();
         if (Build.VERSION.SDK_INT < 29) {
             showToast("系统版本过低，无法录制屏幕声音（需要 Android 10 及以上）");
             return;
@@ -757,8 +767,156 @@ public class FloatingService extends Service implements CaptureManager.CallbackH
 
     private void updateBallMode() {
         if (button == null) return;
+        if (subtitleEngine != null) {
+            button.setText("译");
+            button.setAlpha(1f);
+            return;
+        }
         button.setText(mode == MODE_LISTEN ? "听" : mode == MODE_SEE ? "看" : "AI");
         button.setAlpha(mode == MODE_NONE ? Prefs.buttonAlpha(this) : 1f);
+    }
+
+    // ---------------- 长按 2 秒：实时双语字幕 ----------------
+
+    private void toggleSubtitles() {
+        if (subtitleEngine != null) {
+            stopSubtitles();
+            showToast("实时字幕已关闭");
+        } else {
+            startSubtitles();
+        }
+    }
+
+    private void startSubtitles() {
+        if (Build.VERSION.SDK_INT < 29) {
+            showToast("系统版本过低，实时字幕需要 Android 10 及以上");
+            return;
+        }
+        if (mode != MODE_NONE) {
+            showToast("正在听/看屏幕录制，请先结束再开实时字幕");
+            return;
+        }
+        if (!capture.isReady()) {
+            showToast("声音通道不可用：系统录屏可能占用了授权，请关闭系统录屏后重新开启悬浮助手");
+            return;
+        }
+        showSubtitleWindow();
+        LiveSubtitleEngine engine = new LiveSubtitleEngine(this, new LiveSubtitleEngine.Listener() {
+            @Override
+            public void onSource(String text, boolean sourceChinese) {
+                if (subZh == null || subEn == null) return;
+                if (sourceChinese) {
+                    subZh.setText(text);
+                    subEn.setText("翻译中…");
+                } else {
+                    subEn.setText(text);
+                    subZh.setText("翻译中…");
+                }
+            }
+
+            @Override
+            public void onTranslated(String source, String translated, boolean sourceChinese) {
+                if (subZh == null || subEn == null) return;
+                if (sourceChinese) {
+                    subZh.setText(source);
+                    subEn.setText(translated);
+                } else {
+                    subEn.setText(source);
+                    subZh.setText(translated);
+                }
+            }
+
+            @Override
+            public void onError(String message) {
+                if (subZh == null || subEn == null) return;
+                subZh.setText("实时字幕不可用");
+                subEn.setText(message);
+                LiveSubtitleEngine e = subtitleEngine;
+                subtitleEngine = null;
+                updateBallMode();
+                if (e != null) new Thread(e::stop, "subtitle-stop").start();
+            }
+        });
+        if (!engine.start(capture.getProjection())) {
+            hideSubtitleWindow();
+            showToast("无法监听屏幕声音，请重新开启悬浮助手后再试");
+            return;
+        }
+        subtitleEngine = engine;
+        updateBallMode();
+        tick(35);
+        showToast("实时字幕已开启，再次长按 2 秒关闭");
+    }
+
+    private void stopSubtitles() {
+        LiveSubtitleEngine engine = subtitleEngine;
+        subtitleEngine = null;
+        hideSubtitleWindow();
+        updateBallMode();
+        if (engine != null) new Thread(engine::stop, "subtitle-stop").start();
+    }
+
+    private void showSubtitleWindow() {
+        hideSubtitleWindow();
+        LinearLayout root = new LinearLayout(this);
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setBackgroundResource(R.drawable.bg_subtitle);
+        int ph = Ui.dp(this, 14);
+        int pv = Ui.dp(this, 10);
+        root.setPadding(ph, pv, ph, pv);
+
+        subZh = new TextView(this);
+        subZh.setText("正在听屏幕声音…");
+        subZh.setTextColor(Color.WHITE);
+        subZh.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
+        subZh.setTypeface(Typeface.DEFAULT_BOLD);
+        subZh.setMaxLines(2);
+        subZh.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        subZh.setLineSpacing(Ui.dp(this, 2), 1f);
+        root.addView(subZh, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        subEn = new TextView(this);
+        subEn.setText("Listening…");
+        subEn.setTextColor(0xCCFFFFFF);
+        subEn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+        subEn.setMaxLines(2);
+        subEn.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        LinearLayout.LayoutParams enLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        enLp.topMargin = Ui.dp(this, 4);
+        root.addView(subEn, enLp);
+
+        WindowManager.LayoutParams params = new WindowManager.LayoutParams(
+                Ui.screenWidth(this) - Ui.dp(this, 24),
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
+                        ? WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+                        : WindowManager.LayoutParams.TYPE_PHONE,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                        | WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+                        | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
+                android.graphics.PixelFormat.TRANSLUCENT);
+        params.gravity = Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL;
+        params.y = Ui.dp(this, 76);
+        try {
+            wm.addView(root, params);
+            subtitleView = root;
+        } catch (Exception e) {
+            subtitleView = null;
+        }
+    }
+
+    private void hideSubtitleWindow() {
+        if (subtitleView != null) {
+            try {
+                wm.removeView(subtitleView);
+            } catch (Exception ignored) {
+            }
+        }
+        subtitleView = null;
+        subZh = null;
+        subEn = null;
     }
 
     private File saveAudio() {
@@ -1247,6 +1405,7 @@ public class FloatingService extends Service implements CaptureManager.CallbackH
     @Override
     public void onProjectionStop() {
         main.post(() -> {
+            stopSubtitles();
             boolean fallback = ScreenAccessibilityService.isReady();
             Prefs.setRunning(this, true);
             publishState(fallback ? "系统录屏占用了截图授权，已切换无障碍截图" : "截图授权已结束，请重新开启");

@@ -5,7 +5,7 @@
 An always-on-top Android floating ball: **tap to save the screenshot, double-tap to ask a typed question with the screenshot, triple-tap to translate the screenshot**. The ball is only 48dp, never takes input focus, and every touch outside its own window goes straight to the app underneath — video, chat and browsing keep working normally.
 
 - Package: `com.aivision.floatassist`
-- Version: 1.3
+- Version: 1.4
 - Minimum: Android 8.0 (API 26), tuned for Android 14
 - Stack: Java + Android Framework + MediaProjection + ML Kit OCR + OkHttp
 
@@ -18,6 +18,7 @@ An always-on-top Android floating ball: **tap to save the screenshot, double-tap
 | Triple tap | Capture and translate: Chinese → English, any other language → Simplified Chinese. Only the translation is shown. |
 | Quadruple tap | Start recording screen audio ("listen"); tap four times again to stop, transcribe and summarize what was heard. |
 | Quintuple tap | Start "see + listen": a screenshot every 15s plus continuous screen audio; tap five times again to stop and summarize both on a timeline. |
+| Long-press 2s | Toggle live bilingual subtitles fixed at the bottom: Chinese on top, English below. Long-press 2s again to close. |
 
 Drag the ball to move it; it snaps to the nearest edge on release. Long-press for 0.5s opens a quick menu (open settings / stop assistant). Opacity is adjustable from 25% to 100%.
 
@@ -29,6 +30,14 @@ Drag the ball to move it; it snaps to the nearest edge on release. Long-press fo
 4. Tap "Grant overlay permission" and enable "Display over other apps" in system settings.
 5. Tap "Start assistant" and accept the one-time "Screen capture" consent dialog.
 6. You can leave the app; the floating ball stays on screen.
+
+## Live bilingual subtitles
+
+- Long-press the ball for 2 seconds to start, again to stop; the ball shows "译" while active.
+- The subtitle window sits at the bottom, ignores touch, and never blocks the app underneath. Chinese is always the first line, English the second.
+- How it works: every 2.6 seconds a chunk of screen audio is transcribed by `qwen3-asr-flash`, then translated into the other language (Chinese speech → English, English speech → Chinese). The source line appears first, the pair is completed when translation returns.
+- Because a chunk must accumulate first, subtitles lag the picture by roughly 4–8 seconds — near real-time. Backlogged chunks are dropped so it keeps up.
+- Requires the Model Studio (Bailian/Qwen) endpoint for both ASR and translation; unavailable while the projection token is held by another recorder.
 
 ## Screen capture vs. the system recorder (Xiaomi / HyperOS)
 
@@ -76,7 +85,7 @@ Translation details:
 - The window is only 48×48dp with `FLAG_NOT_FOCUSABLE | FLAG_NOT_TOUCH_MODAL`: it never takes input focus, and touches outside the window are forwarded to the app below.
 - After dragging it snaps to the left or right screen edge.
 - Translucent, with adjustable opacity.
-- A panel appears only after an intentional double/triple tap; "Collapse / Close" restores the original screen immediately.
+- A panel appears only after an intentional double/triple tap; "Collapse / Close" restores the original screen immediately. The subtitle window ignores touch entirely.
 - A low-importance notification stays in the status bar, required by Android for the foreground media-projection service. It never pops a banner.
 
 ## Known limitations
@@ -123,6 +132,7 @@ app/src/main/java/com/aivision/floatassist/
 
 ## Changelog
 
+- **1.4**: Added long-press (2s) live bilingual subtitles with Chinese on top and English below, fixed at the bottom; 2.6-second chunks are transcribed and translated with roughly 4–8s latency.
 - **1.3**: Fixed capture failures and black five-tap frames while the system recorder runs: added an accessibility screenshot fallback with automatic switching on empty/black frames, graceful degradation when the projection is revoked, and screen-only see-listen mode without a capture token.
 - **1.2**: Added quadruple-tap listen and quintuple-tap see+listen; AudioPlaybackCapture for screen audio, `qwen3-asr-flash` chunked transcription, and a 15-second timeline that aligns screenshots with audio before summarizing. The ball shows a "听 / 看" state.
 - **1.1**: Fixed English screenshots being returned untranslated (explicit target language + echo detection and one retry); panel title now shows the target language; clearer message when there is no text and no vision model.
