@@ -51,6 +51,34 @@ public final class Prefs {
         sp(c).edit().putInt("btn_x", x).putInt("btn_y", y).apply();
     }
 
+
+    // ---------------- 同声传译 ----------------
+
+    public static boolean subtitleWs(Context c) {
+        return sp(c).getBoolean("sub_ws", true);
+    }
+
+    /** 非 WebSocket 分块模式的切段间隔（毫秒） */
+    public static int subtitleChunkMs(Context c) {
+        int v = sp(c).getInt("sub_interval_ms", 1000);
+        if (v < 300) v = 300;
+        if (v > 10000) v = 10000;
+        return v;
+    }
+
+    public static boolean subtitleOverlap(Context c) {
+        return sp(c).getBoolean("sub_overlap", true);
+    }
+
+    /** 分段重叠时长（毫秒），不超过间隔的一半 */
+    public static int subtitleOverlapMs(Context c) {
+        int chunk = subtitleChunkMs(c);
+        int v = sp(c).getInt("sub_overlap_ms", 300);
+        if (v < 0) v = 0;
+        if (v > chunk / 2) v = chunk / 2;
+        return v;
+    }
+
     public static boolean running(Context c) {
         return sp(c).getBoolean("running", false);
     }

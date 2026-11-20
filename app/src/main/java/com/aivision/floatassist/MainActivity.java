@@ -18,6 +18,7 @@ import android.view.View;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.SeekBar;
+import android.widget.Switch;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -27,8 +28,9 @@ public class MainActivity extends Activity {
     private static final int REQ_CAPTURE = 1001;
     private static final int REQ_NOTIFICATION = 1002;
 
-    private EditText etKey, etBase, etModel, etVision;
-    private TextView tvPerm, tvAlpha, tvStatus;
+    private EditText etKey, etBase, etModel, etVision, etSubInterval, etSubOverlap;
+    private Switch swSubWs, swSubOverlap;
+    private TextView tvPerm, tvAlpha, tvStatus, tvSubSummary;
     private SeekBar seekAlpha;
     private Button btnGallery, btnAccess;
     private TextView tvAccess;
@@ -47,6 +49,11 @@ public class MainActivity extends Activity {
         tvPerm = findViewById(R.id.tv_perm);
         tvAlpha = findViewById(R.id.tv_alpha);
         tvStatus = findViewById(R.id.tv_status);
+        swSubWs = findViewById(R.id.sw_sub_ws);
+        swSubOverlap = findViewById(R.id.sw_sub_overlap);
+        etSubInterval = findViewById(R.id.et_sub_interval);
+        etSubOverlap = findViewById(R.id.et_sub_overlap_ms);
+        tvSubSummary = findViewById(R.id.tv_sub_summary);
         seekAlpha = findViewById(R.id.seek_alpha);
         btnGallery = findViewById(R.id.btn_gallery);
         btnAccess = findViewById(R.id.btn_access);
@@ -58,6 +65,31 @@ public class MainActivity extends Activity {
                 startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS));
             } catch (Exception e) {
                 toast("无法打开无障碍设置");
+            }
+        });
+
+        swSubWs.setOnCheckedChangeListener((b, v) -> updateSubtitleSummary());
+        swSubOverlap.setOnCheckedChangeListener((b, v) -> updateSubtitleSummary());
+        etSubInterval.addTextChangedListener(new android.text.TextWatcher() {
+            public void beforeTextChanged(CharSequence s, int a, int b, int c) {
+            }
+
+            public void onTextChanged(CharSequence s, int a, int b, int c) {
+                updateSubtitleSummary();
+            }
+
+            public void afterTextChanged(android.text.Editable s) {
+            }
+        });
+        etSubOverlap.addTextChangedListener(new android.text.TextWatcher() {
+            public void beforeTextChanged(CharSequence s, int a, int b, int c) {
+            }
+
+            public void onTextChanged(CharSequence s, int a, int b, int c) {
+                updateSubtitleSummary();
+            }
+
+            public void afterTextChanged(android.text.Editable s) {
             }
         });
 
@@ -147,6 +179,33 @@ public class MainActivity extends Activity {
         if (alpha < 25) alpha = 25;
         seekAlpha.setProgress(alpha);
         tvAlpha.setText(alpha + "%");
+
+        swSubWs.setChecked(Prefs.subtitleWs(this));
+        swSubOverlap.setChecked(Prefs.subtitleOverlap(this));
+        etSubInterval.setText(String.valueOf(Prefs.subtitleChunkMs(this)));
+        etSubOverlap.setText(String.valueOf(Prefs.subtitleOverlapMs(this)));
+        updateSubtitleSummary();
+    }
+
+    private void updateSubtitleSummary() {
+        if (tvSubSummary == null) return;
+        int interval = parseIntSafe(etSubInterval.getText().toString(), 1000, 300, 10000);
+        int overlap = parseIntSafe(etSubOverlap.getText().toString(), 300, 0, Math.max(0, interval / 2));
+        String mode = swSubWs.isChecked() ? "WebSocket 流式" : "分块（非 WebSocket）";
+        String ov = swSubOverlap.isChecked() ? ("重叠 " + overlap + " ms") : "不重叠";
+        tvSubSummary.setText("当前：" + mode + "，间隔 " + interval + " ms，" + ov);
+    }
+
+    private static int parseIntSafe(String s, int def, int min, int max) {
+        int v;
+        try {
+            v = Integer.parseInt(s.trim());
+        } catch (Exception e) {
+            v = def;
+        }
+        if (v < min) v = min;
+        if (v > max) v = max;
+        return v;
     }
 
     private void saveConfig() {
@@ -157,7 +216,16 @@ public class MainActivity extends Activity {
         if (base.isEmpty()) base = "https://api.deepseek.com";
         String model = etModel.getText().toString().trim();
         if (model.isEmpty()) model = "deepseek-chat";
+        int interval = parseIntSafe(etSubInterval.getText().toString(), 1000, 300, 10000);
+        int overlap = parseIntSafe(etSubOverlap.getText().toString(), 300, 0, Math.max(0, interval / 2));
+        if (!swSubOverlap.isChecked()) overlap = 0;
+        etSubInterval.setText(String.valueOf(interval));
+        etSubOverlap.setText(String.valueOf(overlap));
         Prefs.sp(this).edit()
+                .putBoolean("sub_ws", swSubWs.isChecked())
+                .putInt("sub_interval_ms", interval)
+                .putBoolean("sub_overlap", swSubOverlap.isChecked())
+                .putInt("sub_overlap_ms", overlap)
                 .putString("api_key", etKey.getText().toString().trim())
                 .putString("base_url", base)
                 .putString("model", model)
@@ -165,6 +233,7 @@ public class MainActivity extends Activity {
                 .apply();
         etBase.setText(base);
         etModel.setText(model);
+        updateSubtitleSummary();
     }
 
     private void testConnection() {

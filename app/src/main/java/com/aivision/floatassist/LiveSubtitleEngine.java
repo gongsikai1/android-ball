@@ -49,10 +49,13 @@ public class LiveSubtitleEngine {
     private static final int MODE_CHUNK = 2;
 
     private static final int RATE = 16000;
-    private static final long CHUNK_MS = 1000;
-    private static final int OVERLAP_BYTES = (int) (RATE * 2 * 0.3);
-    private static final int MIN_BYTES = RATE * 2 / 2;
     private static final int FRAME_BYTES = 3200; // 100ms @16k mono 16bit
+    private static final int BYTES_PER_MS = RATE * 2 / 1000; // 32 bytes/ms
+
+    private boolean wsEnabled = true;
+    private int chunkMs = 1000;
+    private int overlapBytes = 300 * BYTES_PER_MS;
+    private int minChunkBytes = 500 * BYTES_PER_MS;
 
     private final android.content.Context context;
     private final Listener listener;
@@ -291,14 +294,14 @@ public class LiveSubtitleEngine {
             // 分块模式
             frameCount = 0;
             acc.write(raw, 0, rawLen);
-            if (SystemClock.elapsedRealtime() - chunkStart >= CHUNK_MS) {
+            if (SystemClock.elapsedRealtime() - chunkStart >= chunkMs) {
                 byte[] data = acc.toByteArray();
                 acc.reset();
                 chunkStart = SystemClock.elapsedRealtime();
-                if (data.length > OVERLAP_BYTES) {
-                    acc.write(data, data.length - OVERLAP_BYTES, OVERLAP_BYTES);
+                if (overlapBytes > 0 && data.length > overlapBytes) {
+                    acc.write(data, data.length - overlapBytes, overlapBytes);
                 }
-                if (data.length >= MIN_BYTES) {
+                if (data.length >= minChunkBytes) {
                     final int mySeq = seqGen.incrementAndGet();
                     final byte[] payload = data;
                     try {

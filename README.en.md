@@ -5,7 +5,7 @@
 An always-on-top Android floating ball: **tap to save the screenshot, double-tap to ask a typed question with the screenshot, triple-tap to translate the screenshot**. The ball is only 48dp, never takes input focus, and every touch outside its own window goes straight to the app underneath — video, chat and browsing keep working normally.
 
 - Package: `com.aivision.floatassist`
-- Version: 1.7
+- Version: 1.8
 - Minimum: Android 8.0 (API 26), tuned for Android 14
 - Stack: Java + Android Framework + MediaProjection + ML Kit OCR + OkHttp
 
@@ -30,6 +30,17 @@ Drag the ball to move it; it snaps to the nearest edge on release. Long-press fo
 4. Tap "Grant overlay permission" and enable "Display over other apps" in system settings.
 5. Tap "Start assistant" and accept the one-time "Screen capture" consent dialog.
 6. You can leave the app; the floating ball stays on screen.
+
+## Interpreter settings (in-app "同声传译设置")
+
+| Option | Meaning |
+| --- | --- |
+| Use WebSocket streaming | On: `qwen3-asr-flash-realtime` transcribes as you speak, server VAD segments sentences. Off: chunked mode using the interval below. |
+| Interpretation interval | Milliseconds, 300–10000, default 1000; applies to chunked (non-WebSocket) mode only. |
+| Segment overlap | Toggle; the next chunk includes the tail of the previous chunk to avoid cutting words in half. |
+| Overlap duration | Milliseconds, 0 to half of the interval, default 300; chunked mode only. |
+
+In WebSocket mode the server segments by silence (400ms), so interval/overlap do not apply. If the key, model or network is unavailable it falls back to chunked mode using these values. Settings are stored in the app; starting subtitles shows the current mode.
 
 ## Live bilingual subtitles
 
@@ -138,6 +149,7 @@ app/src/main/java/com/aivision/floatassist/
 
 ## Changelog
 
+- **1.8**: Added in-app interpreter settings: WebSocket streaming vs chunked mode, millisecond interval, overlap toggle and overlap duration.
 - **1.7**: Fixed Chinese-top/English-bottom layout for any source language (Chinese, English, Japanese, other languages and dialects); non-Chinese/English speech is translated to both in one call.
 - **1.6**: Live subtitles upgraded to Model Studio `qwen3-asr-flash-realtime` WebSocket streaming — text as you speak (about 0.5–1s drafts), sentence-level translation with context; automatic fallback to chunked mode.
 - **1.5**: Faster subtitles — 1-second chunks, three parallel transcriptions, separate translation pool; bottom bar text now centered. Latency down from roughly 4–8s to 2–4s.

@@ -849,7 +849,14 @@ public class FloatingService extends Service implements CaptureManager.CallbackH
         subtitleEngine = engine;
         updateBallMode();
         tick(35);
-        showToast("实时字幕已开启，再次长按 2 秒关闭");
+        String modeText;
+        if (Prefs.subtitleWs(this)) {
+            modeText = "WebSocket 流式";
+        } else {
+            modeText = "分块 " + Prefs.subtitleChunkMs(this) + "ms";
+            if (Prefs.subtitleOverlap(this)) modeText += "，重叠 " + Prefs.subtitleOverlapMs(this) + "ms";
+        }
+        showToast("实时字幕已开启（" + modeText + "），再次长按 2 秒关闭");
     }
 
     private void stopSubtitles() {
