@@ -252,6 +252,136 @@ public final class AiClient {
         }, "ai-translate-text").start();
     }
 
+    /** 同传双语：任意源语言 → 简体中文 + 英文，一次调用出两行 */
+    public interface BiCb {
+        void onOk(String zh, String en);
+
+        void onError(String message);
+    }
+
+    public static void translateBilingual(Context ctx, String text, String prevContext, BiCb cb) {
+        String key = Prefs.key(ctx);
+        if (key.isEmpty()) {
+            cb.onError("还没有填写 API Key");
+            return;
+        }
+        final String src = text == null ? "" : text.trim();
+        if (src.isEmpty()) {
+            cb.onOk("", "");
+            return;
+        }
+        final String prev = prevContext == null ? "" : prevContext.trim();
+        new Thread(() -> {
+            try {
+                JSONArray messages = new JSONArray();
+                messages.put(new JSONObject().put("role", "system").put("content",
+                        "你是专业同声传译引擎。把用户给出的任意语言口语句子，同时译成简体中文和英文。\n"
+                                + "只输出一个 JSON 对象，格式：{\"zh\":\"中文译文\",\"en\":\"English translation\"}，不要任何解释、不要代码块、不要原文。\n"
+                                + "要求：口语化、可直接当字幕；人名/品牌/术语前后一致；语气词可省略；上一句只作语境，不要翻译。"));
+                String user = (prev.isEmpty() ? "" : "上一句（仅语境，勿翻译）：" + prev + "\n\n")
+                        + "本句：\n" + src;
+                messages.put(new JSONObject().put("role", "user").put("content", user));
+                String body = new JSONObject()
+                        .put("model", Prefs.model(ctx))
+                        .put("messages", messages)
+                        .put("temperature", 0.1)
+                        .put("max_tokens", 800)
+                        .toString();
+                String raw = call(ctx, body, key);
+                String zh = "", en = "";
+                try {
+                    int a = raw.indexOf('{');
+                    int b = raw.lastIndexOf('}');
+                    if (a >= 0 && b > a) {
+                        JSONObject o = new JSONObject(raw.substring(a, b + 1));
+                        zh = clean(o.optString("zh", ""));
+                        en = clean(o.optString("en", ""));
+                    }
+                } catch (Exception ignored) {
+                }
+                if (zh.isEmpty()) zh = plainTranslate(ctx, key, src, "简体中文");
+                if (en.isEmpty()) en = plainTranslate(ctx, key, src, "英文");
+                if (zh.isEmpty() && en.isEmpty()) {
+                    cb.onError("未拿到译文");
+                    return;
+                }
+                cb.onOk(zh, en);
+            } catch (Exception e) {
+                cb.onError(readable(e));
+            }
+        }, "ai-translate-bi").start();
+    }
+
+    private static String plainTranslate(Context ctx, String key, String src, String target) {
+        try {
+            JSONArray messages = new JSONArray();
+            messages.put(new JSONObject().put("role", "system").put("content", translatePrompt(target)));
+            messages.put(new JSONObject().put("role", "user")
+                    .put("content", "把下面这段文字翻译成" + target + "，只输出译文：\n\n" + src));
+            String body = new JSONObject()
+                    .put("model", Prefs.model(ctx))
+                    .put("messages", messages)
+                    .put("temperature", 0.1)
+                    .put("max_tokens", 600)
+                    .toString();
+            return clean(call(ctx, body, key));
+        } catch (Exception e) {
+            return "";
+        }
+    }
+
+    /** 同声传译单句翻译：带上一句上下文，口语化、术语一致，只出译文 */
+    public static void translateLine(Context ctx, String text, String target, String prevContext, Cb cb) {
+        String key = Prefs.key(ctx);
+        if (key.isEmpty()) {
+            cb.onError("还没有填写 API Key");
+            return;
+        }
+        final String src = text == null ? "" : text.trim();
+        if (src.isEmpty()) {
+            cb.onOk("");
+            return;
+        }
+        final String prev = prevContext == null ? "" : prevContext.trim();
+        new Thread(() -> {
+            try {
+                JSONArray messages = new JSONArray();
+                messages.put(new JSONObject().put("role", "system").put("content",
+                        "你是专业同声传译引擎，把口语内容即时翻译成" + target + "。\n"
+                                + "要求：\n"
+                                + "1. 只输出译文，不加引号、不加原文对照、不解释、不补全没说出口的内容。\n"
+                                + "2. 保持口语语气，句子短、可直接当字幕；人名、品牌、术语前后一致。\n"
+                                + "3. 遇到语气词、口头禅可省略；数字、专有名词按中文/英文习惯处理。\n"
+                                + "4. 上一句只作语境参考，不要翻译它，也不要重复它。"));
+                String user = (prev.isEmpty() ? "" : "上一句（仅作语境，勿翻译）：" + prev + "\n\n")
+                        + "本句（翻译成" + target + "，只输出译文）：\n" + src;
+                messages.put(new JSONObject().put("role", "user").put("content", user));
+                String body = new JSONObject()
+                        .put("model", Prefs.model(ctx))
+                        .put("messages", messages)
+                        .put("temperature", 0.1)
+                        .put("max_tokens", 500)
+                        .toString();
+                String out = clean(call(ctx, body, key));
+                if (out.isEmpty() || isEcho(src, out)) {
+                    // 模型复述原文时重试一次，严格只出译文
+                    messages.put(new JSONObject().put("role", "user")
+                            .put("content", "刚才没有输出" + target + "译文。请直接给译文，禁止照抄原文：\n" + src));
+                    body = new JSONObject()
+                            .put("model", Prefs.model(ctx))
+                            .put("messages", messages)
+                            .put("temperature", 0.0)
+                            .put("max_tokens", 500)
+                            .toString();
+                    out = clean(call(ctx, body, key));
+                }
+                cb.onOk(out);
+            } catch (Exception e) {
+                cb.onError(readable(e));
+            }
+        }, "ai-translate-line").start();
+    }
+
     /** 屏幕声音转写：千问 qwen3-asr-flash（OpenAI 兼容 chat/completions + input_audio） */
     public static void transcribe(Context ctx, File wav, Cb cb) {
         String key = Prefs.key(ctx);

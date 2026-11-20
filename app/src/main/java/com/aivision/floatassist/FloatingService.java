@@ -803,27 +803,31 @@ public class FloatingService extends Service implements CaptureManager.CallbackH
         showSubtitleWindow();
         LiveSubtitleEngine engine = new LiveSubtitleEngine(this, new LiveSubtitleEngine.Listener() {
             @Override
-            public void onSource(String text, boolean sourceChinese) {
+            public void onPartial(String zh, String en) {
                 if (subZh == null || subEn == null) return;
-                if (sourceChinese) {
-                    subZh.setText(text);
-                    subEn.setText("翻译中…");
-                } else {
-                    subEn.setText(text);
-                    subZh.setText("翻译中…");
-                }
+                subZh.setText(zh);
+                subEn.setText(en);
             }
 
             @Override
-            public void onTranslated(String source, String translated, boolean sourceChinese) {
+            public void onFinal(String zh, String en) {
                 if (subZh == null || subEn == null) return;
-                if (sourceChinese) {
-                    subZh.setText(source);
-                    subEn.setText(translated);
-                } else {
-                    subEn.setText(source);
-                    subZh.setText(translated);
-                }
+                subZh.setText(zh);
+                subEn.setText(en);
+            }
+
+            @Override
+            public void onTranslated(String zh, String en) {
+                if (subZh == null || subEn == null) return;
+                subZh.setText(zh);
+                subEn.setText(en);
+            }
+
+            @Override
+            public void onMode(String notice) {
+                if (subZh == null || subEn == null) return;
+                subZh.setText("正在识别…");
+                subEn.setText(notice);
             }
 
             @Override
