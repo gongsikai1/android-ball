@@ -53,6 +53,35 @@ public final class Prefs {
 
 
     // ---------------- 同声传译 ----------------
+    // ---- 英文翻译（默认跟随中文同传配置）----
+
+    public static boolean enStream(Context c) {
+        if (!sp(c).contains("en_ws")) return subtitleWs(c);
+        return sp(c).getBoolean("en_ws", true);
+    }
+
+    public static int enIntervalMs(Context c) {
+        if (!sp(c).contains("en_interval_ms")) return subtitleChunkMs(c);
+        int v = sp(c).getInt("en_interval_ms", 1000);
+        if (v < 300) v = 300;
+        if (v > 10000) v = 10000;
+        return v;
+    }
+
+    public static boolean enOverlap(Context c) {
+        if (!sp(c).contains("en_overlap")) return subtitleOverlap(c);
+        return sp(c).getBoolean("en_overlap", true);
+    }
+
+    public static int enOverlapMs(Context c) {
+        int base = enIntervalMs(c);
+        if (!sp(c).contains("en_overlap_ms")) return Math.min(subtitleOverlapMs(c), base / 2);
+        int v = sp(c).getInt("en_overlap_ms", 300);
+        if (v < 0) v = 0;
+        if (v > base / 2) v = base / 2;
+        return v;
+    }
+
 
     public static boolean subtitleWs(Context c) {
         return sp(c).getBoolean("sub_ws", true);

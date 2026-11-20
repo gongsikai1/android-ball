@@ -75,11 +75,24 @@ public class LiveSubtitleEngine {
 
     // ---- 字幕显示协调（主线程访问）----
     private int sentenceId = 0;
-    private boolean translating = false;
-    private String pendingDraft = "";
-    private int pendingDraftKind = LANG_ZH;
-    private boolean hasPendingDraft = false;
+    private String currentSource = "";
+    private int currentKind = LANG_ZH;
+    private String currentZh = "";
+    private String currentEn = "";
     private String lastContext = "";
+
+    // ---- 英文翻译（实时刷新）----
+    private boolean enStream = true;
+    private int enIntervalMs = 1000;
+    private boolean enOverlap = true;
+    private int enOverlapMs = 300;
+    private ThreadPoolExecutor livePool;
+    private volatile boolean liveInFlight = false;
+    private long lastLiveStart = 0;
+    private String liveText = "";
+    private int liveKind = LANG_ZH;
+    private int liveSentenceId = 0;
+    private final Runnable liveJob = this::runLiveTranslation;
 
     private final AtomicInteger seqGen = new AtomicInteger(0);
     private final AtomicInteger failStreak = new AtomicInteger(0);
@@ -143,6 +156,21 @@ public class LiveSubtitleEngine {
                             }
                         }
                     });
+
+            livePool = new ThreadPoolExecutor(1, 1, 30, TimeUnit.SECONDS,
+                    new ArrayBlockingQueue<>(1), (r, executor) -> {
+                        if (!executor.isShutdown()) {
+                            executor.getQueue().poll();
+                            try {
+                                executor.execute(r);
+                            } catch (Exception ignored) {
+                            }
+                        }
+                    });
+            enStream = Prefs.enStream(context);
+            enIntervalMs = Prefs.enIntervalMs(context);
+            enOverlap = Prefs.enOverlap(context);
+            enOverlapMs = Prefs.enOverlapMs(context);
 
             running = true;
             recording = true;
@@ -340,45 +368,54 @@ public class LiveSubtitleEngine {
 
     // ---------------- 字幕与翻译 --------------
 
-    /** 流式草稿：边说话边出字；正在翻译时暂存，避免中英错位 */
+    /** 流式草稿：中英两行都实时刷新 */
     private void handleDraft(String text, int kind) {
         if (!running) return;
         String t = normalize(text);
         if (t.isEmpty()) return;
-        if (translating) {
-            pendingDraft = t;
-            pendingDraftKind = kind;
-            hasPendingDraft = true;
-            return;
+        currentSource = t;
+        currentKind = kind;
+        if (kind == LANG_ZH) {
+            currentZh = t;
+            listener.onPartial(t, currentEn.isEmpty() ? "翻译中…" : currentEn);
+        } else if (kind == LANG_EN) {
+            currentEn = t;
+            listener.onPartial(currentZh.isEmpty() ? "翻译中…" : currentZh, t);
+        } else {
+            listener.onPartial(currentZh.isEmpty() ? "翻译中…" : currentZh,
+                    currentEn.isEmpty() ? "翻译中…" : currentEn);
         }
-        if (kind == LANG_ZH) listener.onPartial(t, "识别中…");
-        else if (kind == LANG_EN) listener.onPartial("翻译中…", t);
-        else listener.onPartial("识别中…", "识别中…");
+        scheduleLive(t, kind, sentenceId);
     }
 
-    /** 一句定稿：中文/英文直接上屏另一行待译；其他语言两行都翻译 */
+    /** 一句定稿：原文立即上屏，译文随后替换草稿译文 */
     private void handleFinal(String text, int kind, String lang) {
         if (!running) return;
         String t = normalize(text);
         if (t.isEmpty()) return;
         sentenceId++;
         final int id = sentenceId;
-        translating = true;
-        hasPendingDraft = false;
+        currentSource = t;
+        currentKind = kind;
+        currentZh = kind == LANG_ZH ? t : "";
+        currentEn = kind == LANG_EN ? t : "";
+        if (kind == LANG_OTHER) {
+            currentZh = "";
+            currentEn = "";
+        }
 
         if (kind == LANG_ZH) listener.onFinal(t, "翻译中…");
         else if (kind == LANG_EN) listener.onFinal("翻译中…", t);
         else listener.onFinal("翻译中…", "翻译中…");
 
-        final String ctx = lastContext;
-        final int k = kind;
+        final String ctx = enOverlap ? contextSnippet() : "";
         try {
             translatePool.execute(() -> {
                 String zh = "";
                 String en = "";
-                if (k == LANG_ZH) {
+                if (kind == LANG_ZH) {
                     en = translateLineBlocking(t, "英文", ctx);
-                } else if (k == LANG_EN) {
+                } else if (kind == LANG_EN) {
                     zh = translateLineBlocking(t, "简体中文", ctx);
                 } else {
                     String[] pair = translateBiBlocking(t, ctx);
@@ -387,28 +424,97 @@ public class LiveSubtitleEngine {
                 }
                 final String fz = zh;
                 final String fe = en;
-                main.post(() -> finishTranslation(id, t, k, fz, fe));
+                main.post(() -> finishTranslation(id, t, kind, fz, fe));
             });
         } catch (Exception e) {
-            translating = false;
+            finishTranslation(id, t, kind, "", "");
         }
     }
 
     private void finishTranslation(int id, String src, int kind, String zh, String en) {
         if (id != sentenceId) return; // 已被更新的一句顶掉
-        translating = false;
         String zhLine = kind == LANG_ZH ? src : (zh == null || zh.isEmpty() ? "翻译未返回" : zh);
         String enLine = kind == LANG_EN ? src : (en == null || en.isEmpty() ? "翻译未返回" : en);
+        currentZh = zhLine;
+        currentEn = enLine;
         listener.onTranslated(zhLine, enLine);
         lastContext = src;
-        if (hasPendingDraft) {
-            String d = pendingDraft;
-            int k = pendingDraftKind;
-            hasPendingDraft = false;
-            if (k == LANG_ZH) listener.onPartial(d, "识别中…");
-            else if (k == LANG_EN) listener.onPartial("翻译中…", d);
-            else listener.onPartial("识别中…", "识别中…");
+    }
+
+    // ---- 实时译文刷新（英文配置控制）----
+
+    private void scheduleLive(String text, int kind, int sid) {
+        if (!enStream || !running) return;
+        if (sid != sentenceId) return;
+        liveText = text;
+        liveKind = kind;
+        liveSentenceId = sid;
+        if (liveInFlight) return;
+        long wait = enIntervalMs - (SystemClock.elapsedRealtime() - lastLiveStart);
+        main.removeCallbacks(liveJob);
+        if (wait <= 0) main.post(liveJob);
+        else main.postDelayed(liveJob, wait);
+    }
+
+    private void runLiveTranslation() {
+        if (!running || liveInFlight) return;
+        final String text = liveText;
+        final int kind = liveKind;
+        final int sid = liveSentenceId;
+        if (sid != sentenceId || text.isEmpty()) return;
+
+        liveInFlight = true;
+        lastLiveStart = SystemClock.elapsedRealtime();
+        final String ctx = enOverlap ? contextSnippet() : "";
+        try {
+            livePool.execute(() -> {
+                String zh = "";
+                String en = "";
+                if (kind == LANG_ZH) {
+                    en = translateLineBlocking(text, "英文", ctx);
+                } else if (kind == LANG_EN) {
+                    zh = translateLineBlocking(text, "简体中文", ctx);
+                } else {
+                    String[] pair = translateBiBlocking(text, ctx);
+                    zh = pair[0];
+                    en = pair[1];
+                }
+                final String fz = zh;
+                final String fe = en;
+                main.post(() -> {
+                    liveInFlight = false;
+                    if (sid == sentenceId) applyLive(kind, fz, fe);
+                    if (liveText != text || liveKind != kind) {
+                        scheduleLive(liveText, liveKind, liveSentenceId);
+                    }
+                });
+            });
+        } catch (Exception e) {
+            liveInFlight = false;
         }
+    }
+
+    private void applyLive(int kind, String zh, String en) {
+        if (kind == LANG_ZH) {
+            if (!en.isEmpty()) currentEn = en;
+            listener.onPartial(currentSource, currentEn.isEmpty() ? "翻译中…" : currentEn);
+        } else if (kind == LANG_EN) {
+            if (!zh.isEmpty()) currentZh = zh;
+            listener.onPartial(currentZh.isEmpty() ? "翻译中…" : currentZh, currentSource);
+        } else {
+            if (!zh.isEmpty()) currentZh = zh;
+            if (!en.isEmpty()) currentEn = en;
+            listener.onPartial(currentZh.isEmpty() ? "翻译中…" : currentZh,
+                    currentEn.isEmpty() ? "翻译中…" : currentEn);
+        }
+    }
+
+    /** 上一句截取一段作为术语/人称语境，长度按重叠毫秒近似（约 5 字/秒） */
+    private String contextSnippet() {
+        if (!enOverlap || enOverlapMs <= 0 || lastContext.isEmpty()) return "";
+        int chars = Math.max(6, enOverlapMs / 200);
+        return lastContext.length() <= chars ? lastContext
+                : lastContext.substring(lastContext.length() - chars);
     }
 
     private String[] translateBiBlocking(String text, String prev) {
@@ -554,6 +660,12 @@ public class LiveSubtitleEngine {
             translatePool.getQueue().clear();
             translatePool.shutdownNow();
             translatePool = null;
+        }
+        main.removeCallbacks(liveJob);
+        if (livePool != null) {
+            livePool.getQueue().clear();
+            livePool.shutdownNow();
+            livePool = null;
         }
         release();
         File dir = new File(context.getCacheDir(), "subtitle_chunks");

@@ -261,6 +261,114 @@
                 android:textSize="12sp" />
         </LinearLayout>
 
+        <!-- 英文翻译设置 -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="14dp"
+            android:background="@drawable/bg_card"
+            android:orientation="vertical"
+            android:padding="16dp">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="英文翻译设置"
+                android:textColor="@color/text"
+                android:textSize="16sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:text="控制英文字幕的刷新方式；默认与中文同传配置一致"
+                android:textColor="@color/text_sub"
+                android:textSize="12sp" />
+
+            <Switch
+                android:id="@+id/sw_en_stream"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="12dp"
+                android:text="英文实时刷新（边说边译，推荐）"
+                android:textColor="@color/text"
+                android:textSize="14sp" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="12dp"
+                android:text="英文刷新间隔（毫秒）"
+                android:textColor="@color/text_sub"
+                android:textSize="12sp" />
+
+            <EditText
+                android:id="@+id/et_en_interval"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:background="@drawable/bg_input"
+                android:hint="1000"
+                android:inputType="number"
+                android:minHeight="44dp"
+                android:padding="12dp"
+                android:textColor="@color/text"
+                android:textColorHint="#98A2B3"
+                android:textSize="13sp" />
+
+            <Switch
+                android:id="@+id/sw_en_overlap"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="12dp"
+                android:text="英文翻译带上下文重叠（术语更连贯）"
+                android:textColor="@color/text"
+                android:textSize="14sp" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="12dp"
+                android:text="上下文重叠时长（毫秒）"
+                android:textColor="@color/text_sub"
+                android:textSize="12sp" />
+
+            <EditText
+                android:id="@+id/et_en_overlap_ms"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:background="@drawable/bg_input"
+                android:hint="300"
+                android:inputType="number"
+                android:minHeight="44dp"
+                android:padding="12dp"
+                android:textColor="@color/text"
+                android:textColorHint="#98A2B3"
+                android:textSize="13sp" />
+
+            <Button
+                android:id="@+id/btn_en_copy"
+                android:layout_width="match_parent"
+                android:layout_height="44dp"
+                android:layout_marginTop="12dp"
+                android:background="@drawable/bg_btn_ghost"
+                android:text="与中文配置一致"
+                android:textAllCaps="false"
+                android:textColor="@color/primary"
+                android:textSize="14sp" />
+
+            <TextView
+                android:id="@+id/tv_en_summary"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:text="当前：实时刷新，间隔 1000 ms，重叠 300 ms"
+                android:textColor="@color/text_sub"
+                android:textSize="12sp" />
+        </LinearLayout>
+
         <!-- 悬浮球 -->
         <LinearLayout
             android:layout_width="match_parent"

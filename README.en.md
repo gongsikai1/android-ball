@@ -5,7 +5,7 @@
 An always-on-top Android floating ball: **tap to save the screenshot, double-tap to ask a typed question with the screenshot, triple-tap to translate the screenshot**. The ball is only 48dp, never takes input focus, and every touch outside its own window goes straight to the app underneath — video, chat and browsing keep working normally.
 
 - Package: `com.aivision.floatassist`
-- Version: 1.8
+- Version: 1.9
 - Minimum: Android 8.0 (API 26), tuned for Android 14
 - Stack: Java + Android Framework + MediaProjection + ML Kit OCR + OkHttp
 
@@ -41,6 +41,17 @@ Drag the ball to move it; it snaps to the nearest edge on release. Long-press fo
 | Overlap duration | Milliseconds, 0 to half of the interval, default 300; chunked mode only. |
 
 In WebSocket mode the server segments by silence (400ms), so interval/overlap do not apply. If the key, model or network is unavailable it falls back to chunked mode using these values. Settings are stored in the app; starting subtitles shows the current mode.
+
+**English translation settings (independent, defaults mirror the Chinese config)**
+
+| Option | Meaning |
+| --- | --- |
+| Live English refresh | On: during speech, the English line refreshes from the latest Chinese draft at the configured interval; Off: translate only after a sentence is finalized |
+| English refresh interval | Milliseconds, 300–10000, defaults to the Chinese interval; minimum gap between English refreshes |
+| Context overlap | Toggle; include the tail of the previous sentence as context for consistent terms and pronouns |
+| Context overlap duration | Milliseconds, defaults to the Chinese overlap; converted at roughly 5 characters per second (minimum 6 characters) |
+
+Until English settings are saved, every English option **defaults to the Chinese interpreter config**. "与中文配置一致" copies the current Chinese values in one tap and saves them.
 
 ## Live bilingual subtitles
 
@@ -149,6 +160,7 @@ app/src/main/java/com/aivision/floatassist/
 
 ## Changelog
 
+- **1.9**: Added independent English translation settings (live refresh toggle, millisecond refresh interval, context overlap toggle and duration), defaulting to the Chinese config; English subtitles update while speaking.
 - **1.8**: Added in-app interpreter settings: WebSocket streaming vs chunked mode, millisecond interval, overlap toggle and overlap duration.
 - **1.7**: Fixed Chinese-top/English-bottom layout for any source language (Chinese, English, Japanese, other languages and dialects); non-Chinese/English speech is translated to both in one call.
 - **1.6**: Live subtitles upgraded to Model Studio `qwen3-asr-flash-realtime` WebSocket streaming — text as you speak (about 0.5–1s drafts), sentence-level translation with context; automatic fallback to chunked mode.

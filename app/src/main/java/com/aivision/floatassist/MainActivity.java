@@ -28,9 +28,9 @@ public class MainActivity extends Activity {
     private static final int REQ_CAPTURE = 1001;
     private static final int REQ_NOTIFICATION = 1002;
 
-    private EditText etKey, etBase, etModel, etVision, etSubInterval, etSubOverlap;
-    private Switch swSubWs, swSubOverlap;
-    private TextView tvPerm, tvAlpha, tvStatus, tvSubSummary;
+    private EditText etKey, etBase, etModel, etVision, etSubInterval, etSubOverlap, etEnInterval, etEnOverlap;
+    private Switch swSubWs, swSubOverlap, swEnStream, swEnOverlap;
+    private TextView tvPerm, tvAlpha, tvStatus, tvSubSummary, tvEnSummary;
     private SeekBar seekAlpha;
     private Button btnGallery, btnAccess;
     private TextView tvAccess;
@@ -54,6 +54,11 @@ public class MainActivity extends Activity {
         etSubInterval = findViewById(R.id.et_sub_interval);
         etSubOverlap = findViewById(R.id.et_sub_overlap_ms);
         tvSubSummary = findViewById(R.id.tv_sub_summary);
+        swEnStream = findViewById(R.id.sw_en_stream);
+        swEnOverlap = findViewById(R.id.sw_en_overlap);
+        etEnInterval = findViewById(R.id.et_en_interval);
+        etEnOverlap = findViewById(R.id.et_en_overlap_ms);
+        tvEnSummary = findViewById(R.id.tv_en_summary);
         seekAlpha = findViewById(R.id.seek_alpha);
         btnGallery = findViewById(R.id.btn_gallery);
         btnAccess = findViewById(R.id.btn_access);
@@ -69,6 +74,38 @@ public class MainActivity extends Activity {
         });
 
         swSubWs.setOnCheckedChangeListener((b, v) -> updateSubtitleSummary());
+        swEnStream.setOnCheckedChangeListener((b, v) -> updateEnglishSummary());
+        swEnOverlap.setOnCheckedChangeListener((b, v) -> updateEnglishSummary());
+        etEnInterval.addTextChangedListener(new android.text.TextWatcher() {
+            public void beforeTextChanged(CharSequence s, int a, int b, int c) {
+            }
+
+            public void onTextChanged(CharSequence s, int a, int b, int c) {
+                updateEnglishSummary();
+            }
+
+            public void afterTextChanged(android.text.Editable s) {
+            }
+        });
+        etEnOverlap.addTextChangedListener(new android.text.TextWatcher() {
+            public void beforeTextChanged(CharSequence s, int a, int b, int c) {
+            }
+
+            public void onTextChanged(CharSequence s, int a, int b, int c) {
+                updateEnglishSummary();
+            }
+
+            public void afterTextChanged(android.text.Editable s) {
+            }
+        });
+        findViewById(R.id.btn_en_copy).setOnClickListener(v -> {
+            swEnStream.setChecked(swSubWs.isChecked());
+            etEnInterval.setText(etSubInterval.getText().toString());
+            swEnOverlap.setChecked(swSubOverlap.isChecked());
+            etEnOverlap.setText(etSubOverlap.getText().toString());
+            saveConfig();
+            toast("英文配置已跟随中文");
+        });
         swSubOverlap.setOnCheckedChangeListener((b, v) -> updateSubtitleSummary());
         etSubInterval.addTextChangedListener(new android.text.TextWatcher() {
             public void beforeTextChanged(CharSequence s, int a, int b, int c) {
@@ -185,6 +222,12 @@ public class MainActivity extends Activity {
         etSubInterval.setText(String.valueOf(Prefs.subtitleChunkMs(this)));
         etSubOverlap.setText(String.valueOf(Prefs.subtitleOverlapMs(this)));
         updateSubtitleSummary();
+
+        swEnStream.setChecked(Prefs.enStream(this));
+        swEnOverlap.setChecked(Prefs.enOverlap(this));
+        etEnInterval.setText(String.valueOf(Prefs.enIntervalMs(this)));
+        etEnOverlap.setText(String.valueOf(Prefs.enOverlapMs(this)));
+        updateEnglishSummary();
     }
 
     private void updateSubtitleSummary() {
@@ -194,6 +237,15 @@ public class MainActivity extends Activity {
         String mode = swSubWs.isChecked() ? "WebSocket 流式" : "分块（非 WebSocket）";
         String ov = swSubOverlap.isChecked() ? ("重叠 " + overlap + " ms") : "不重叠";
         tvSubSummary.setText("当前：" + mode + "，间隔 " + interval + " ms，" + ov);
+    }
+
+    private void updateEnglishSummary() {
+        if (tvEnSummary == null) return;
+        int interval = parseIntSafe(etEnInterval.getText().toString(), 1000, 300, 10000);
+        int overlap = parseIntSafe(etEnOverlap.getText().toString(), 300, 0, Math.max(0, interval / 2));
+        String mode = swEnStream.isChecked() ? "实时刷新" : "整句翻译";
+        String ov = swEnOverlap.isChecked() ? ("上下文 " + overlap + " ms") : "无上下文";
+        tvEnSummary.setText("当前：" + mode + "，间隔 " + interval + " ms，" + ov);
     }
 
     private static int parseIntSafe(String s, int def, int min, int max) {
@@ -221,7 +273,16 @@ public class MainActivity extends Activity {
         if (!swSubOverlap.isChecked()) overlap = 0;
         etSubInterval.setText(String.valueOf(interval));
         etSubOverlap.setText(String.valueOf(overlap));
+        int enInterval = parseIntSafe(etEnInterval.getText().toString(), 1000, 300, 10000);
+        int enOverlap = parseIntSafe(etEnOverlap.getText().toString(), 300, 0, Math.max(0, enInterval / 2));
+        if (!swEnOverlap.isChecked()) enOverlap = 0;
+        etEnInterval.setText(String.valueOf(enInterval));
+        etEnOverlap.setText(String.valueOf(enOverlap));
         Prefs.sp(this).edit()
+                .putBoolean("en_ws", swEnStream.isChecked())
+                .putInt("en_interval_ms", enInterval)
+                .putBoolean("en_overlap", swEnOverlap.isChecked())
+                .putInt("en_overlap_ms", enOverlap)
                 .putBoolean("sub_ws", swSubWs.isChecked())
                 .putInt("sub_interval_ms", interval)
                 .putBoolean("sub_overlap", swSubOverlap.isChecked())
@@ -234,6 +295,7 @@ public class MainActivity extends Activity {
         etBase.setText(base);
         etModel.setText(model);
         updateSubtitleSummary();
+        updateEnglishSummary();
     }
 
     private void testConnection() {
