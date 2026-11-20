@@ -28,7 +28,7 @@ public class MainActivity extends Activity {
     private static final int REQ_CAPTURE = 1001;
     private static final int REQ_NOTIFICATION = 1002;
 
-    private EditText etKey, etBase, etModel, etVision, etSubInterval, etSubOverlap, etEnInterval, etEnOverlap;
+    private EditText etKey, etBase, etModel, etVision, etSubInterval, etSubOverlap, etEnInterval, etEnOverlap, etSubBreak, etEnBreak;
     private Switch swSubWs, swSubOverlap, swEnStream, swEnOverlap;
     private TextView tvPerm, tvAlpha, tvStatus, tvSubSummary, tvEnSummary;
     private SeekBar seekAlpha;
@@ -59,6 +59,8 @@ public class MainActivity extends Activity {
         etEnInterval = findViewById(R.id.et_en_interval);
         etEnOverlap = findViewById(R.id.et_en_overlap_ms);
         tvEnSummary = findViewById(R.id.tv_en_summary);
+        etSubBreak = findViewById(R.id.et_sub_break);
+        etEnBreak = findViewById(R.id.et_en_break);
         seekAlpha = findViewById(R.id.seek_alpha);
         btnGallery = findViewById(R.id.btn_gallery);
         btnAccess = findViewById(R.id.btn_access);
@@ -98,11 +100,34 @@ public class MainActivity extends Activity {
             public void afterTextChanged(android.text.Editable s) {
             }
         });
+        etSubBreak.addTextChangedListener(new android.text.TextWatcher() {
+            public void beforeTextChanged(CharSequence s, int a, int b, int c) {
+            }
+
+            public void onTextChanged(CharSequence s, int a, int b, int c) {
+                updateSubtitleSummary();
+            }
+
+            public void afterTextChanged(android.text.Editable s) {
+            }
+        });
+        etEnBreak.addTextChangedListener(new android.text.TextWatcher() {
+            public void beforeTextChanged(CharSequence s, int a, int b, int c) {
+            }
+
+            public void onTextChanged(CharSequence s, int a, int b, int c) {
+                updateEnglishSummary();
+            }
+
+            public void afterTextChanged(android.text.Editable s) {
+            }
+        });
         findViewById(R.id.btn_en_copy).setOnClickListener(v -> {
             swEnStream.setChecked(swSubWs.isChecked());
             etEnInterval.setText(etSubInterval.getText().toString());
             swEnOverlap.setChecked(swSubOverlap.isChecked());
             etEnOverlap.setText(etSubOverlap.getText().toString());
+            etEnBreak.setText(etSubBreak.getText().toString());
             saveConfig();
             toast("英文配置已跟随中文");
         });
@@ -221,12 +246,14 @@ public class MainActivity extends Activity {
         swSubOverlap.setChecked(Prefs.subtitleOverlap(this));
         etSubInterval.setText(String.valueOf(Prefs.subtitleChunkMs(this)));
         etSubOverlap.setText(String.valueOf(Prefs.subtitleOverlapMs(this)));
+        etSubBreak.setText(String.valueOf(Prefs.subtitleBreakMs(this)));
         updateSubtitleSummary();
 
         swEnStream.setChecked(Prefs.enStream(this));
         swEnOverlap.setChecked(Prefs.enOverlap(this));
         etEnInterval.setText(String.valueOf(Prefs.enIntervalMs(this)));
         etEnOverlap.setText(String.valueOf(Prefs.enOverlapMs(this)));
+        etEnBreak.setText(String.valueOf(Prefs.enBreakMs(this)));
         updateEnglishSummary();
     }
 
@@ -235,8 +262,10 @@ public class MainActivity extends Activity {
         int interval = parseIntSafe(etSubInterval.getText().toString(), 1000, 300, 10000);
         int overlap = parseIntSafe(etSubOverlap.getText().toString(), 300, 0, Math.max(0, interval / 2));
         String mode = swSubWs.isChecked() ? "WebSocket 流式" : "分块（非 WebSocket）";
+        int brk = parseIntSafe(etSubBreak.getText().toString(), 400, 200, 6000);
         String ov = swSubOverlap.isChecked() ? ("重叠 " + overlap + " ms") : "不重叠";
-        tvSubSummary.setText("当前：" + mode + "，间隔 " + interval + " ms，" + ov);
+        String sec = String.format(java.util.Locale.US, "%.1f", brk / 1000f);
+        tvSubSummary.setText("当前：" + mode + "，间隔 " + interval + " ms，断句 " + brk + " ms（" + sec + " s），" + ov);
     }
 
     private void updateEnglishSummary() {
@@ -244,8 +273,10 @@ public class MainActivity extends Activity {
         int interval = parseIntSafe(etEnInterval.getText().toString(), 1000, 300, 10000);
         int overlap = parseIntSafe(etEnOverlap.getText().toString(), 300, 0, Math.max(0, interval / 2));
         String mode = swEnStream.isChecked() ? "实时刷新" : "整句翻译";
+        int brk = parseIntSafe(etEnBreak.getText().toString(), 400, 200, 6000);
         String ov = swEnOverlap.isChecked() ? ("上下文 " + overlap + " ms") : "无上下文";
-        tvEnSummary.setText("当前：" + mode + "，间隔 " + interval + " ms，" + ov);
+        String sec = String.format(java.util.Locale.US, "%.1f", brk / 1000f);
+        tvEnSummary.setText("当前：" + mode + "，间隔 " + interval + " ms，断句 " + brk + " ms（" + sec + " s），" + ov);
     }
 
     private static int parseIntSafe(String s, int def, int min, int max) {
@@ -273,16 +304,22 @@ public class MainActivity extends Activity {
         if (!swSubOverlap.isChecked()) overlap = 0;
         etSubInterval.setText(String.valueOf(interval));
         etSubOverlap.setText(String.valueOf(overlap));
+        int subBreak = parseIntSafe(etSubBreak.getText().toString(), 400, 200, 6000);
+        etSubBreak.setText(String.valueOf(subBreak));
         int enInterval = parseIntSafe(etEnInterval.getText().toString(), 1000, 300, 10000);
         int enOverlap = parseIntSafe(etEnOverlap.getText().toString(), 300, 0, Math.max(0, enInterval / 2));
         if (!swEnOverlap.isChecked()) enOverlap = 0;
         etEnInterval.setText(String.valueOf(enInterval));
         etEnOverlap.setText(String.valueOf(enOverlap));
+        int enBreak = parseIntSafe(etEnBreak.getText().toString(), 400, 200, 6000);
+        etEnBreak.setText(String.valueOf(enBreak));
         Prefs.sp(this).edit()
+                .putInt("en_break_ms", enBreak)
                 .putBoolean("en_ws", swEnStream.isChecked())
                 .putInt("en_interval_ms", enInterval)
                 .putBoolean("en_overlap", swEnOverlap.isChecked())
                 .putInt("en_overlap_ms", enOverlap)
+                .putInt("sub_break_ms", subBreak)
                 .putBoolean("sub_ws", swSubWs.isChecked())
                 .putInt("sub_interval_ms", interval)
                 .putBoolean("sub_overlap", swSubOverlap.isChecked())

@@ -92,7 +92,10 @@ public class LiveSubtitleEngine {
     private String liveText = "";
     private int liveKind = LANG_ZH;
     private int liveSentenceId = 0;
+    private int enBreakMs = 400;
+    private long lastDraftAt = 0;
     private final Runnable liveJob = this::runLiveTranslation;
+    private final Runnable englishSettle = this::onEnglishSettle;
 
     private final AtomicInteger seqGen = new AtomicInteger(0);
     private final AtomicInteger failStreak = new AtomicInteger(0);
@@ -171,6 +174,7 @@ public class LiveSubtitleEngine {
             enIntervalMs = Prefs.enIntervalMs(context);
             enOverlap = Prefs.enOverlap(context);
             enOverlapMs = Prefs.enOverlapMs(context);
+            enBreakMs = Prefs.enBreakMs(context);
 
             running = true;
             recording = true;
@@ -236,7 +240,7 @@ public class LiveSubtitleEngine {
             }
         });
         main.postDelayed(connectTimeout, 4500);
-        stream.connect(key, RealtimeAsrClient.endpoint(context));
+        stream.connect(key, RealtimeAsrClient.endpoint(context), Prefs.subtitleBreakMs(context));
     }
 
     private void onConnectTimeout() {
@@ -386,6 +390,9 @@ public class LiveSubtitleEngine {
                     currentEn.isEmpty() ? "翻译中…" : currentEn);
         }
         scheduleLive(t, kind, sentenceId);
+        lastDraftAt = SystemClock.elapsedRealtime();
+        main.removeCallbacks(englishSettle);
+        if (enStream) main.postDelayed(englishSettle, enBreakMs);
     }
 
     /** 一句定稿：原文立即上屏，译文随后替换草稿译文 */
@@ -454,6 +461,20 @@ public class LiveSubtitleEngine {
         main.removeCallbacks(liveJob);
         if (wait <= 0) main.post(liveJob);
         else main.postDelayed(liveJob, wait);
+    }
+
+    /** 草稿静默超过英文断句间隔：不等 ASR 句末，立即把最新草稿整句英译 */
+    private void onEnglishSettle() {
+        if (!running || !enStream) return;
+        if (SystemClock.elapsedRealtime() - lastDraftAt < enBreakMs - 20) {
+            main.postDelayed(englishSettle, 100);
+            return;
+        }
+        if (liveInFlight) {
+            main.postDelayed(englishSettle, 150);
+            return;
+        }
+        runLiveTranslation();
     }
 
     private void runLiveTranslation() {
@@ -662,6 +683,7 @@ public class LiveSubtitleEngine {
             translatePool = null;
         }
         main.removeCallbacks(liveJob);
+        main.removeCallbacks(englishSettle);
         if (livePool != null) {
             livePool.getQueue().clear();
             livePool.shutdownNow();

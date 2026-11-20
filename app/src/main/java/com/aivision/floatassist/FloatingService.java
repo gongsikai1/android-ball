@@ -804,23 +804,17 @@ public class FloatingService extends Service implements CaptureManager.CallbackH
         LiveSubtitleEngine engine = new LiveSubtitleEngine(this, new LiveSubtitleEngine.Listener() {
             @Override
             public void onPartial(String zh, String en) {
-                if (subZh == null || subEn == null) return;
-                subZh.setText(zh);
-                subEn.setText(en);
+                showSubtitleLines(zh, en);
             }
 
             @Override
             public void onFinal(String zh, String en) {
-                if (subZh == null || subEn == null) return;
-                subZh.setText(zh);
-                subEn.setText(en);
+                showSubtitleLines(zh, en);
             }
 
             @Override
             public void onTranslated(String zh, String en) {
-                if (subZh == null || subEn == null) return;
-                subZh.setText(zh);
-                subEn.setText(en);
+                showSubtitleLines(zh, en);
             }
 
             @Override
@@ -867,6 +861,31 @@ public class FloatingService extends Service implements CaptureManager.CallbackH
         if (engine != null) new Thread(engine::stop, "subtitle-stop").start();
     }
 
+    /** 只显示最新的一段：超出两行容量就从尾部截取，保证正在说的话看得见 */
+    private void setSubtitleLines(String zh, String en) {
+        if (subZh == null || subEn == null) return;
+        subZh.setText(fitTail(zh, 46, 1.0, 0.5));
+        subEn.setText(fitTail(en, 100, 2.0, 1.0));
+    }
+
+    private String fitTail(String text, int cap, double cjkWeight, double latinWeight) {
+        if (text == null) return "";
+        String s = text.replace("\n", " ").trim();
+        double w = 0;
+        int i = s.length();
+        while (i > 0) {
+            char c = s.charAt(i - 1);
+            double cw = (c >= 0x2E80) ? cjkWeight : latinWeight;
+            if (w + cw > cap) break;
+            w += cw;
+            i--;
+        }
+        if (i == 0) return s;
+        // 跳过开头的空格/标点，避免出现「… ，」
+        while (i < s.length() && (s.charAt(i) == ' ' || s.charAt(i) == '，' || s.charAt(i) == ',')) i++;
+        return "…" + s.substring(i);
+    }
+
     private void showSubtitleWindow() {
         hideSubtitleWindow();
         LinearLayout root = new LinearLayout(this);
@@ -884,7 +903,7 @@ public class FloatingService extends Service implements CaptureManager.CallbackH
         subZh.setMaxLines(2);
         subZh.setGravity(Gravity.CENTER);
         subZh.setTextAlignment(View.TEXT_ALIGNMENT_CENTER);
-        subZh.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        subZh.setEllipsize(android.text.TextUtils.TruncateAt.START);
         subZh.setLineSpacing(Ui.dp(this, 2), 1f);
         root.addView(subZh, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
@@ -896,7 +915,7 @@ public class FloatingService extends Service implements CaptureManager.CallbackH
         subEn.setMaxLines(2);
         subEn.setGravity(Gravity.CENTER);
         subEn.setTextAlignment(View.TEXT_ALIGNMENT_CENTER);
-        subEn.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        subEn.setEllipsize(android.text.TextUtils.TruncateAt.START);
         LinearLayout.LayoutParams enLp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         enLp.topMargin = Ui.dp(this, 4);
@@ -920,6 +939,34 @@ public class FloatingService extends Service implements CaptureManager.CallbackH
         } catch (Exception e) {
             subtitleView = null;
         }
+    }
+
+    /** 两行放不下时立即翻到新的一页：只显示最新一段，前面用省略号，不再继续追加被截断 */
+    private void showSubtitleLines(String zh, String en) {
+        if (subZh == null || subEn == null) return;
+        subZh.setText(tailPage(zh, 46, false));
+        subEn.setText(tailPage(en, 96, true));
+    }
+
+    /**
+     * 取文本末尾能放下的部分作为新一页。
+     * maxChars 为两行的保守容量；wordBoundary=true 时英文按空格断，避免显示半个单词。
+     */
+    private static String tailPage(String text, int maxChars, boolean wordBoundary) {
+        if (text == null) return "";
+        String s = text.trim();
+        if (s.length() <= maxChars) return s;
+        String cut = s.substring(s.length() - maxChars);
+        if (wordBoundary) {
+            int sp = cut.indexOf(' ');
+            if (sp > 0 && sp < maxChars / 3) cut = cut.substring(sp + 1);
+        } else {
+            int p = cut.indexOf('，');
+            if (p > 0 && p < 10) cut = cut.substring(p + 1);
+            p = cut.indexOf('。');
+            if (p > 0 && p < 10) cut = cut.substring(p + 1);
+        }
+        return "…" + cut.trim();
     }
 
     private void hideSubtitleWindow() {

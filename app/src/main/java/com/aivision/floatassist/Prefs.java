@@ -55,6 +55,15 @@ public final class Prefs {
     // ---------------- 同声传译 ----------------
     // ---- 英文翻译（默认跟随中文同传配置）----
 
+    /** 英文定稿等待：草稿静默超过该时长就立即整句英译（毫秒） */
+    public static int enBreakMs(Context c) {
+        if (!sp(c).contains("en_break_ms")) return subtitleBreakMs(c);
+        int v = sp(c).getInt("en_break_ms", 400);
+        if (v < 200) v = 200;
+        if (v > 6000) v = 6000;
+        return v;
+    }
+
     public static boolean enStream(Context c) {
         if (!sp(c).contains("en_ws")) return subtitleWs(c);
         return sp(c).getBoolean("en_ws", true);
@@ -82,6 +91,14 @@ public final class Prefs {
         return v;
     }
 
+
+    /** WebSocket 模式 VAD 断句静音阈值（毫秒） */
+    public static int subtitleBreakMs(Context c) {
+        int v = sp(c).getInt("sub_break_ms", 400);
+        if (v < 200) v = 200;
+        if (v > 6000) v = 6000;
+        return v;
+    }
 
     public static boolean subtitleWs(Context c) {
         return sp(c).getBoolean("sub_ws", true);

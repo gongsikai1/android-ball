@@ -5,7 +5,7 @@
 An always-on-top Android floating ball: **tap to save the screenshot, double-tap to ask a typed question with the screenshot, triple-tap to translate the screenshot**. The ball is only 48dp, never takes input focus, and every touch outside its own window goes straight to the app underneath — video, chat and browsing keep working normally.
 
 - Package: `com.aivision.floatassist`
-- Version: 1.9
+- Version: 2.0
 - Minimum: Android 8.0 (API 26), tuned for Android 14
 - Stack: Java + Android Framework + MediaProjection + ML Kit OCR + OkHttp
 
@@ -37,6 +37,7 @@ Drag the ball to move it; it snaps to the nearest edge on release. Long-press fo
 | --- | --- |
 | Use WebSocket streaming | On: `qwen3-asr-flash-realtime` transcribes as you speak, server VAD segments sentences. Off: chunked mode using the interval below. |
 | Interpretation interval | Milliseconds, 300–10000, default 1000; applies to chunked (non-WebSocket) mode only. |
+| Sentence-break interval | Milliseconds, 200–6000, default 400; silence needed to end a sentence (WebSocket VAD), shown in seconds too. |
 | Segment overlap | Toggle; the next chunk includes the tail of the previous chunk to avoid cutting words in half. |
 | Overlap duration | Milliseconds, 0 to half of the interval, default 300; chunked mode only. |
 
@@ -48,6 +49,7 @@ In WebSocket mode the server segments by silence (400ms), so interval/overlap do
 | --- | --- |
 | Live English refresh | On: during speech, the English line refreshes from the latest Chinese draft at the configured interval; Off: translate only after a sentence is finalized |
 | English refresh interval | Milliseconds, 300–10000, defaults to the Chinese interval; minimum gap between English refreshes |
+| English sentence-break interval | Milliseconds, 200–6000, defaults to the Chinese value; when the draft has been silent longer than this, the English line is finalized immediately instead of waiting for the ASR sentence end |
 | Context overlap | Toggle; include the tail of the previous sentence as context for consistent terms and pronouns |
 | Context overlap duration | Milliseconds, defaults to the Chinese overlap; converted at roughly 5 characters per second (minimum 6 characters) |
 
@@ -57,6 +59,7 @@ Until English settings are saved, every English option **defaults to the Chinese
 
 - Long-press the ball for 2 seconds to start, again to stop; the ball shows "译" while active.
 - The subtitle window sits at the bottom with text centered horizontally, ignores touch, and never blocks the app underneath. **Chinese is always the first line, English the second.**
+- Each line shows only the **latest segment**: if it does not fit in two lines it is trimmed from the tail and prefixed with "…", so the words being spoken stay visible instead of pushing the rest out of view.
 - By default it uses Model Studio **streaming ASR** `qwen3-asr-flash-realtime` over WebSocket: text appears as you speak, a sentence is finalized after 0.4s of silence, and draft latency is about 0.5–1s.
 - Chinese, English, Japanese, other languages and dialects are all supported, and **every sentence is shown as Chinese + English**:
   - Chinese/dialect speech: Chinese transcript on top, English translation below;
@@ -160,6 +163,7 @@ app/src/main/java/com/aivision/floatassist/
 
 ## Changelog
 
+- **2.0**: Subtitles now scroll from the tail (the newest segment is shown when text does not fit); Chinese and English configs each gained a sentence-break interval in milliseconds (with a seconds readout).
 - **1.9**: Added independent English translation settings (live refresh toggle, millisecond refresh interval, context overlap toggle and duration), defaulting to the Chinese config; English subtitles update while speaking.
 - **1.8**: Added in-app interpreter settings: WebSocket streaming vs chunked mode, millisecond interval, overlap toggle and overlap duration.
 - **1.7**: Fixed Chinese-top/English-bottom layout for any source language (Chinese, English, Japanese, other languages and dialects); non-Chinese/English speech is translated to both in one call.

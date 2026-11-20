@@ -48,6 +48,7 @@ public class RealtimeAsrClient {
     private volatile boolean ready;
     private volatile boolean closed;
     private volatile boolean finished;
+    private volatile int silenceMs = 400;
 
     public RealtimeAsrClient(Listener listener) {
         this.listener = listener;
@@ -71,10 +72,15 @@ public class RealtimeAsrClient {
     }
 
     public void connect(String apiKey) {
-        connect(apiKey, null);
+        connect(apiKey, null, 400);
     }
 
     public void connect(String apiKey, String url) {
+        connect(apiKey, url, 400);
+    }
+
+    public void connect(String apiKey, String url, int silenceMs) {
+        this.silenceMs = Math.max(200, Math.min(6000, silenceMs));
         if (url == null || url.isEmpty()) url = "wss://dashscope.aliyuncs.com/api-ws/v1/realtime?model=" + MODEL;
         OkHttpClient client = new OkHttpClient.Builder()
                 .readTimeout(0, TimeUnit.MILLISECONDS)
@@ -130,7 +136,7 @@ public class RealtimeAsrClient {
                     .put("turn_detection", new JSONObject()
                             .put("type", "server_vad")
                             .put("threshold", 0.0)
-                            .put("silence_duration_ms", 400));
+                            .put("silence_duration_ms", silenceMs));
             JSONObject event = new JSONObject()
                     .put("event_id", "event_" + System.nanoTime())
                     .put("type", "session.update")
