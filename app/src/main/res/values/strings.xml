@@ -1,4 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">AI 识图悬浮助手</string>
+    <string name="accessibility_desc">仅在系统录屏占用截图通道时，作为 AI 悬浮助手的备用截图方式。不会读取窗口内容，只在点击悬浮球时截取屏幕。</string>
+    <string name="accessibility_label">AI 识图截图备用通道</string>
 </resources>

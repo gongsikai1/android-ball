@@ -5,7 +5,7 @@
 An always-on-top Android floating ball: **tap to save the screenshot, double-tap to ask a typed question with the screenshot, triple-tap to translate the screenshot**. The ball is only 48dp, never takes input focus, and every touch outside its own window goes straight to the app underneath — video, chat and browsing keep working normally.
 
 - Package: `com.aivision.floatassist`
-- Version: 1.2
+- Version: 1.3
 - Minimum: Android 8.0 (API 26), tuned for Android 14
 - Stack: Java + Android Framework + MediaProjection + ML Kit OCR + OkHttp
 
@@ -29,6 +29,18 @@ Drag the ball to move it; it snaps to the nearest edge on release. Long-press fo
 4. Tap "Grant overlay permission" and enable "Display over other apps" in system settings.
 5. Tap "Start assistant" and accept the one-time "Screen capture" consent dialog.
 6. You can leave the app; the floating ball stays on screen.
+
+## Screen capture vs. the system recorder (Xiaomi / HyperOS)
+
+The built-in recorder and third-party recorders also consume the `MediaProjection` capture channel. While one is running, this app gets no frames or a fully black image — shown as "capture failed" and black frames in the five-tap mode. It is a platform-level exclusivity, not a permission issue.
+
+v1.3 handles it by:
+
+- Trying `MediaProjection` first; if it returns nothing or an all-black frame, automatically retrying through accessibility screenshot (`AccessibilityService.takeScreenshot`), which uses an independent path.
+- Switching to the fallback when the projection is revoked, with a clear in-app/notification message.
+- Degrading five-tap "see + listen" to screen-only when the capture token is taken, so it still summarizes visuals.
+
+Enable the fallback: tap "Enable accessibility screenshot (recorder fallback)" in the app, then turn on "AI screenshot fallback channel" in Accessibility settings. The service only captures when you tap the ball and never reads window content.
 
 ## Listen / See + Listen
 
@@ -74,6 +86,7 @@ Translation details:
 - The capture resolution is fixed when the assistant starts; rotating the screen or entering split-screen afterwards may crop the result — restart the assistant.
 - A pure image without text, and without a vision model configured, can only be saved; the AI has no information to analyze.
 - Some apps forbid capture (certain DRM videos, calls); the recording will be silent. Headphones do not prevent playback capture.
+- The recorder/screenshot conflict is a platform limit. Accessibility capture bypasses it on most devices, but a few HyperOS builds and DRM-protected content may still produce black frames.
 - See-listen samples every 15s with at most 8 screenshots, so fast scene changes can be missed; chunked transcription may cut sentences at 15-second boundaries.
 - ML Kit OCR struggles with tiny fonts, stylized text and vertical writing. Rephrase the question or take a clearer screenshot.
 
@@ -110,6 +123,7 @@ app/src/main/java/com/aivision/floatassist/
 
 ## Changelog
 
+- **1.3**: Fixed capture failures and black five-tap frames while the system recorder runs: added an accessibility screenshot fallback with automatic switching on empty/black frames, graceful degradation when the projection is revoked, and screen-only see-listen mode without a capture token.
 - **1.2**: Added quadruple-tap listen and quintuple-tap see+listen; AudioPlaybackCapture for screen audio, `qwen3-asr-flash` chunked transcription, and a 15-second timeline that aligns screenshots with audio before summarizing. The ball shows a "听 / 看" state.
 - **1.1**: Fixed English screenshots being returned untranslated (explicit target language + echo detection and one retry); panel title now shows the target language; clearer message when there is no text and no vision model.
 - **1.0**: First release — tap to save, double-tap to ask, triple-tap to translate, draggable edge-snapping ball.

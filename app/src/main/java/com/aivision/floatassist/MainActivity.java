@@ -30,7 +30,8 @@ public class MainActivity extends Activity {
     private EditText etKey, etBase, etModel, etVision;
     private TextView tvPerm, tvAlpha, tvStatus;
     private SeekBar seekAlpha;
-    private Button btnGallery;
+    private Button btnGallery, btnAccess;
+    private TextView tvAccess;
 
     private BroadcastReceiver stateReceiver;
 
@@ -48,6 +49,17 @@ public class MainActivity extends Activity {
         tvStatus = findViewById(R.id.tv_status);
         seekAlpha = findViewById(R.id.seek_alpha);
         btnGallery = findViewById(R.id.btn_gallery);
+        btnAccess = findViewById(R.id.btn_access);
+        tvAccess = findViewById(R.id.tv_access);
+
+        btnAccess.setOnClickListener(v -> {
+            toast("在无障碍列表中找到「AI 识图截图备用通道」并开启");
+            try {
+                startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS));
+            } catch (Exception e) {
+                toast("无法打开无障碍设置");
+            }
+        });
 
         loadConfig();
 
@@ -101,6 +113,7 @@ public class MainActivity extends Activity {
     protected void onResume() {
         super.onResume();
         refreshPermissionState();
+        refreshAccessState();
         refreshStatus();
     }
 
@@ -183,6 +196,21 @@ public class MainActivity extends Activity {
         tvPerm.setTextColor(overlay ? 0xFF12B76A : 0xFFB42318);
     }
 
+    private void refreshAccessState() {
+        boolean enabled = ScreenAccessibilityService.isEnabledInSettings(this);
+        boolean ready = ScreenAccessibilityService.isReady();
+        if (!enabled) {
+            tvAccess.setText("无障碍截图：未开启（系统录屏时截图会失败）");
+            tvAccess.setTextColor(0xFFB42318);
+        } else if (!ready) {
+            tvAccess.setText("无障碍截图：已开启，等待连接…");
+            tvAccess.setTextColor(0xFFB54708);
+        } else {
+            tvAccess.setText("无障碍截图：已就绪，可绕过系统录屏冲突");
+            tvAccess.setTextColor(0xFF12B76A);
+        }
+    }
+
     private void refreshStatus() {
         int count = ShotStore.count(this);
         btnGallery.setText("AI 截图库（" + count + "）");
@@ -217,6 +245,10 @@ public class MainActivity extends Activity {
             return;
         }
         requestNotificationPermissionIfNeeded();
+
+        if (!ScreenAccessibilityService.isEnabledInSettings(this)) {
+            toast("提示：未开启无障碍截图，系统录屏时可能截不到画面");
+        }
 
         MediaProjectionManager mgr = (MediaProjectionManager) getSystemService(Context.MEDIA_PROJECTION_SERVICE);
         if (mgr == null) {

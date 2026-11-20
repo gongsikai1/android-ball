@@ -456,7 +456,7 @@ public class FloatingService extends Service implements CaptureManager.CallbackH
             return;
         }
         if (!capture.isReady()) {
-            showToast("截图授权已失效，请回到 App 重新开启悬浮助手");
+            showToast("录音通道不可用：系统录屏可能正在占用，请关闭系统录屏后重新开启悬浮助手");
             return;
         }
         AudioCapture a = new AudioCapture(this::onAudioLimit);
@@ -477,17 +477,21 @@ public class FloatingService extends Service implements CaptureManager.CallbackH
             showToast("系统版本过低，无法录制屏幕声音（需要 Android 10 及以上）");
             return;
         }
-        if (!capture.isReady()) {
-            showToast("截图授权已失效，请回到 App 重新开启悬浮助手");
+        if (!capture.isReady() && !ScreenAccessibilityService.isReady()) {
+            showToast("截图通道不可用，请关闭系统录屏或在 App 开启「无障碍截图」备用");
             return;
         }
         clearShots();
-        AudioCapture a = new AudioCapture(this::onAudioLimit);
-        if (a.start(capture.getProjection())) {
-            audioCapture = a;
+        audioCapture = null;
+        if (capture.isReady()) {
+            AudioCapture a = new AudioCapture(this::onAudioLimit);
+            if (a.start(capture.getProjection())) {
+                audioCapture = a;
+            } else {
+                showToast("无法录制屏幕声音，这次只记录画面");
+            }
         } else {
-            audioCapture = null;
-            showToast("无法录制屏幕声音，这次只记录画面");
+            showToast("截图授权被系统录屏占用，这次只记录画面（无声音）");
         }
         mode = MODE_SEE;
         sessionStart = System.currentTimeMillis();
@@ -716,7 +720,7 @@ public class FloatingService extends Service implements CaptureManager.CallbackH
                 if (mode != MODE_SEE) return;
                 final long offset = SystemClock.elapsedRealtime() - sessionStart;
                 new Thread(() -> {
-                    Bitmap b = capture.capture();
+                    Bitmap b = captureAny();
                     if (b == null) return;
                     final Bitmap scaled = scale(b, 1024);
                     main.post(() -> {
@@ -790,32 +794,69 @@ public class FloatingService extends Service implements CaptureManager.CallbackH
     }
 
     private void runCapture(Consumer<Bitmap> then) {
-        if (!capture.isReady()) {
-            showToast("截图授权已失效，请回到 App 重新开启悬浮助手");
+        boolean canProj = capture.isReady();
+        boolean canAcc = ScreenAccessibilityService.isReady();
+        if (!canProj && !canAcc) {
+            showToast("截图通道被占用：系统录屏可能正在运行。请关闭系统录屏，或在 App 里开启「无障碍截图」备用");
             return;
         }
         if (busy) return;
         busy = true;
         if (button != null) button.setVisibility(View.INVISIBLE);
         new Thread(() -> {
-            Bitmap bmp;
             try {
                 Thread.sleep(100);
             } catch (InterruptedException ignored) {
                 Thread.currentThread().interrupt();
             }
-            bmp = capture.capture();
+            Bitmap bmp = captureAny();
             final Bitmap shot = bmp;
             main.post(() -> {
                 busy = false;
                 if (button != null) button.setVisibility(View.VISIBLE);
                 if (shot == null) {
-                    showToast("截图失败，请再试一次");
+                    if (canAcc) {
+                        showToast("截图失败，请再试一次");
+                    } else {
+                        showToast("截图失败：系统录屏占用了截图通道，请在 App 开启「无障碍截图」备用");
+                    }
                     return;
                 }
                 then.accept(shot);
             });
         }, "screen-shot").start();
+    }
+
+    /** 优先 MediaProjection；取不到帧或黑屏时自动切换到无障碍截图 */
+    private Bitmap captureAny() {
+        Bitmap bmp = null;
+        if (capture.isReady()) {
+            bmp = capture.capture();
+            if (bmp != null && isBlank(bmp)) {
+                bmp.recycle();
+                bmp = null;
+            }
+        }
+        if (bmp == null) {
+            bmp = ScreenAccessibilityService.captureSync(3500);
+        }
+        return bmp;
+    }
+
+    /** 判断是不是整屏纯黑（系统录屏抢占时的典型表现） */
+    private boolean isBlank(Bitmap b) {
+        if (b == null) return true;
+        int w = b.getWidth();
+        int h = b.getHeight();
+        if (w <= 0 || h <= 0) return true;
+        int stepX = Math.max(1, w / 16);
+        int stepY = Math.max(1, h / 16);
+        for (int y = stepY / 2; y < h; y += stepY) {
+            for (int x = stepX / 2; x < w; x += stepX) {
+                if ((b.getPixel(x, y) & 0x00FFFFFF) != 0) return false;
+            }
+        }
+        return true;
     }
 
     // ---------------- 面板 ----------------
@@ -1206,9 +1247,14 @@ public class FloatingService extends Service implements CaptureManager.CallbackH
     @Override
     public void onProjectionStop() {
         main.post(() -> {
-            Prefs.setRunning(this, false);
-            publishState("截图授权已结束，请重新开启");
-            showToast("截图授权已结束，请回到 App 重新开启");
+            boolean fallback = ScreenAccessibilityService.isReady();
+            Prefs.setRunning(this, true);
+            publishState(fallback ? "系统录屏占用了截图授权，已切换无障碍截图" : "截图授权已结束，请重新开启");
+            if (fallback) {
+                showToast("系统录屏占用了截图，已自动切换到无障碍截图");
+            } else {
+                showToast("截图授权被系统录屏中断，请关闭系统录屏后回 App 重新开启");
+            }
         });
     }
 }
